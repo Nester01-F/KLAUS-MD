@@ -1,5 +1,7 @@
 {
-  "generatedAt": "2026-04-10T00:25:18.027Z",
   "lastPairingCode": null,
-  "lastSessionLength": 0
+  "lastError": "Socket closed before pairing: Connection Closed",
+  "pairingAttempts": [
+    {"attempt":1,"ok":false,"ms":10002,"error":"Socket closed before pairing: Connection Closed"}
+  ]
 }
