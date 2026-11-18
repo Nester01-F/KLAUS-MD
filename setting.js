@@ -1,26 +1,36 @@
+
 /*
   ──────────────────────────────────────────────
     KLAUS MD — Environment Configuration
   ──────────────────────────────────────────────
-  All settings are loaded from process.env with
-  sensible fallbacks.  Keep this file clean and
-  well‑structured – it’s the brain of your bot.
-  ──────────────────────────────────────────────
 */
 
 // ─── Helper Utilities ────────────────────────
-function cleanNumber(raw) {
-  return String(raw || '').replace(/[^0-9]/g, '');
-}
-
 function fromEnv(name, fallback) {
   const value = process.env[name];
   return value === undefined || value === null || value === '' ? fallback : value;
 }
 
+function cleanNumber(raw) {
+  const digits = String(raw || '').replace(/[^0-9]/g, '');
+  // Strip leading 0 (local format) — WhatsApp JIDs never use it
+  return digits.replace(/^0+/, '');
+}
+
+function validatePhone(name, value) {
+  if (!/^\d{10,15}$/.test(value)) {
+    console.warn(`⚠️  ${name}="${value}" is not a valid E.164 number (10-15 digits)`);
+  }
+  return value;
+}
+
 function parsePort(value, fallback) {
   const parsed = Number.parseInt(String(value), 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 65535) {
+    console.warn(`⚠️  Invalid port "${value}", using ${fallback}`);
+    return fallback;
+  }
+  return parsed;
 }
 
 function parseBool(value, fallback) {
@@ -31,33 +41,44 @@ function parseBool(value, fallback) {
   return fallback;
 }
 
+// ─── Validate core settings early ────────────
+const port = parsePort(fromEnv('PORT', '3002'), 3002);
+const sessionPort = parsePort(fromEnv('SESSION_SERVER_PORT', '3001'), 3001);
+
+if (port === sessionPort) {
+  console.error(`❌ PORT and SESSION_SERVER_PORT both = ${port}. They must differ.`);
+  process.exit(1);
+}
+
+const mode = String(fromEnv('MODE', 'public')).toLowerCase();
+if (!['public', 'private'].includes(mode)) {
+  console.error(`❌ MODE must be "public" or "private", got "${mode}"`);
+  process.exit(1);
+}
+
 // ─── Core Bot Settings ───────────────────────
 const settings = {
   // 🔑 Session use SESSION=blinder~
   SESSION: fromEnv('SESSION', ''),
 
-  // ⚙️ Basic Behaviour
   PREFIX: fromEnv('PREFIX', '.'),
-  MODE: fromEnv('MODE', 'public'),           // 'public' or 'private'
+  MODE: mode,
 
-  // 👤 Ownership
-  OWNER_NUMBER: cleanNumber(fromEnv('OWNER_NUMBER', '2340000000000')),
+  OWNER_NUMBER: validatePhone('OWNER_NUMBER',
+    cleanNumber(fromEnv('OWNER_NUMBER', '2340000000000'))),
   OWNER_NAME: fromEnv('OWNER_NAME', 'Klaus Owner'),
 
-  // 🧑‍💻 Developer Info
-  DEVELOPER_NUMBER: cleanNumber(fromEnv('DEVELOPER_NUMBER', '254725391914')),
+  DEVELOPER_NUMBER: validatePhone('DEVELOPER_NUMBER',
+    cleanNumber(fromEnv('DEVELOPER_NUMBER', '254725391914'))),
   DEVELOPER_NAME: fromEnv('DEVELOPER_NAME', 'Warrior Felix'),
 
-  // 🌐 Server & Keep‑Alive
-  PORT: parsePort(fromEnv('PORT', '3002'), 3002),
-  SESSION_SERVER_PORT: parsePort(fromEnv('SESSION_SERVER_PORT', '3001'), 3001),
+  PORT: port,
+  SESSION_SERVER_PORT: sessionPort,
   KEEP_ALIVE_URL: fromEnv('KEEP_ALIVE_URL', ''),
 
-  // 🤖 Bot Identity
   BOT_NAME: fromEnv('BOT_NAME', 'KLAUS MD'),
   APP_MODE: fromEnv('APP_MODE', 'bot'),
 
-  // 📦 External Source (optional dynamic updates)
   BOT_SOURCE_DIR: fromEnv('BOT_SOURCE_DIR', ''),
   BOT_SOURCE_REPO: fromEnv('BOT_SOURCE_REPO', ''),
   BOT_SOURCE_BRANCH: fromEnv('BOT_SOURCE_BRANCH', 'main'),
@@ -74,19 +95,32 @@ const settings = {
 
     COPILOT_API_KEY: fromEnv('COPILOT_API_KEY', ''),
     COPILOT_API_URL: fromEnv('COPILOT_API_URL', ''),
-    COPILOT_MODEL: fromEnv('COPILOT_MODEL', 'gpt-4o-mini')
+    COPILOT_MODEL: fromEnv('COPILOT_MODEL', 'gpt-4o-mini'),
+
+    get OPENAI_ENABLED() { return this.OPENAI_API_KEY.length > 0; },
+    get GEMINI_ENABLED() { return this.GEMINI_API_KEY.length > 0; },
+    get COPILOT_ENABLED() { return this.COPILOT_API_KEY.length > 0; }
   },
 
   // ─── Downloader Module ────────────────────
-  DOWNLOADER: {
-    ENABLED: parseBool(fromEnv('DOWNLOADER_ENABLED', ''), false),
-    API_BASE_URL: fromEnv('DOWNLOADER_API_BASE_URL', ''),
-    ENDPOINT: fromEnv('DOWNLOADER_ENDPOINT', '/download'),
-    API_KEY: fromEnv('DOWNLOADER_API_KEY', ''),
-    API_KEY_HEADER: fromEnv('DOWNLOADER_API_KEY_HEADER', 'x-api-key'),
-    API_KEY_QUERY_NAME: fromEnv('DOWNLOADER_API_KEY_QUERY_NAME', 'apikey'),
-    DEFAULT_QUALITY: fromEnv('DOWNLOADER_DEFAULT_QUALITY', '128')
-  }
+  DOWNLOADER: (() => {
+    const enabled = parseBool(process.env.DOWNLOADER_ENABLED, false);
+    const baseUrl = fromEnv('DOWNLOADER_API_BASE_URL', '');
+    return {
+      ENABLED: enabled && baseUrl.length > 0,
+      API_BASE_URL: baseUrl,
+      ENDPOINT: fromEnv('DOWNLOADER_ENDPOINT', '/download'),
+      API_KEY: fromEnv('DOWNLOADER_API_KEY', ''),
+      API_KEY_HEADER: fromEnv('DOWNLOADER_API_KEY_HEADER', 'x-api-key'),
+      API_KEY_QUERY_NAME: fromEnv('DOWNLOADER_API_KEY_QUERY_NAME', 'apikey'),
+      DEFAULT_QUALITY: fromEnv('DOWNLOADER_DEFAULT_QUALITY', '128')
+    };
+  })()
 };
+
+// Fail fast if SESSION is required but missing
+if (!settings.SESSION || settings.SESSION.trim() === '') {
+  console.warn('⚠️  SESSION env var is empty. The bot may fail to authenticate.');
+}
 
 module.exports = settings;
