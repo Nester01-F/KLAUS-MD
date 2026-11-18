@@ -1,206 +1,152 @@
+# KLAUS-MD 🤖
+
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:00C2FF,50:39D353,100:F97316&height=200&section=header&text=KLAUS-MD&fontSize=70&fontColor=ffffff&animation=fadeIn&fontAlignY=38&desc=WhatsApp%20automation%2C%20reimagined.&descAlignY=58&descSize=18" width="100%" />
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=28&pause=1200&color=00C2FF&center=true&vCenter=true&width=800&lines=KLAUS-MD+%F0%9F%9A%80;Crafted+by+Warrior+Felix;Automate+WhatsApp.+Effortlessly." alt="Typing SVG" />
+
+<br />
+
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=16&pause=1000&color=39D353&center=true&vCenter=true&width=800&lines=Fast+%E2%80%A2+Reliable+%E2%80%A2+Lightweight;One+session.+Every+platform.;Built+different." alt="Typing SVG" />
+
+<br /><br />
 
 <a href="https://github.com/fellix-234/KLAUS-MD/fork">
-  <img src="https://img.shields.io/badge/FORK-000?style=for-the-badge&logo=github&logoColor=white&labelColor=161b22" />
+  <img src="https://img.shields.io/badge/FORK-REPOSITORY-000?style=for-the-badge&logo=github&logoColor=white&labelColor=161b22" />
 </a>
 <a href="https://github.com/fellix-234/KLAUS-MD/stargazers">
-  <img src="https://img.shields.io/badge/STAR-FFD700?style=for-the-badge&logo=github&logoColor=black&labelColor=161b22" />
+  <img src="https://img.shields.io/badge/STAR-REPOSITORY-FFD700?style=for-the-badge&logo=github&logoColor=black&labelColor=161b22" />
 </a>
 <a href="https://wa.me/254725391914">
-  <img src="https://img.shields.io/badge/WHATSAPP-25D366?style=for-the-badge&logo=whatsapp&logoColor=white&labelColor=161b22" />
-</a>
-<a href="https://klaus-md-i86d.onrender.com/">
-  <img src="https://img.shields.io/badge/GET%20SESSION-2563EB?style=for-the-badge&logo=key&logoColor=white&labelColor=161b22" />
+  <img src="https://img.shields.io/badge/DEVELOPER-WHATSAPP-25D366?style=for-the-badge&logo=whatsapp&logoColor=white&labelColor=161b22" />
 </a>
 
 <br /><br />
 
-<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=22&pause=1000&color=39D353&center=true&vCenter=true&width=700&lines=Fast.;Modular.;Deploy+anywhere.;Built+different." alt="Typing SVG" />
+<img src="./lib/menu.jpg" alt="KLAUS-MD Menu Preview" width="420" />
 
 </div>
 
 ---
 
-## 💡 The Pitch
+## ⚡ What is KLAUS-MD?
 
-Most WhatsApp bots are a mess — 200 files, zero structure, breaks on the first update.
+> **KLAUS-MD** is a lightning-fast WhatsApp automation bot built on **Baileys** — designed for people who want power without the pain.  
+> No messy setup. No confusing configs. Just link, deploy, and go.
 
-**KLAUS-MD is the opposite.**
-
-One session string. One command. One deploy. It runs on Render, Railway, Heroku, VPS, or Docker — and it stays out of your way.
-
-```
-$ npm start
-> KLAUS-MD v1.0.0
-> Loading commands... 47 loaded ✅
-> Connecting to WhatsApp... 🟢
-> Ready. Type .menu to begin.
-```
-
-That's the whole setup.
+Whether you're running commands, managing groups, or building your own automation empire — KLAUS-MD keeps it smooth, snappy, and simple.
 
 ---
 
-## 🎯 What Makes It Different
-
-<table>
-<tr>
-<td width="33%" align="center">
-
-### ⚡
-
-**Fast by Default**
-
-Baileys core, zero bloat. Commands respond in under 200ms.
-
-</td>
-<td width="33%" align="center">
-
-### 🧩
-
-**Modular Commands**
-
-One file per command. Drop it in `commands/`. Restart. Done.
-
-</td>
-<td width="33%" align="center">
-
-### 🔐
-
-**Session-First**
-
-Generate a session string in 30 seconds. Deploy it anywhere. Reuse forever.
-
-</td>
-</tr>
-<tr>
-<td width="33%" align="center">
-
-### ☁️
-
-**5 Deploy Targets**
-
-Render, Railway, Heroku, VPS (PM2), and Docker — all tested.
-
-</td>
-<td width="33%" align="center">
-
-### 🎨
-
-**Number-Reply Menus**
-
-Users reply with `1`, `2`, `3`. No commands to memorize.
-
-</td>
-<td width="33%" align="center">
-
-### 🪵
-
-**Real Logs**
-
-Colorized startup banner. Pairing debug log. Session status JSON. You always know what's happening.
-
-</td>
-</tr>
-</table>
-
----
-
-## 🖼️ See It In Action
+## 🚀 Deploy in Seconds
 
 <div align="center">
-  <img src="./lib/menu.jpg" alt="KLAUS-MD Menu Preview" width="380" />
-  <br/>
-  <sub><i>The number-reply menu — reply with any digit to navigate.</i></sub>
+
+<a href="https://render.com/deploy?repo=https://github.com/fellix-234/KLAUS-MD">
+  <img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="40" />
+</a>
+&nbsp;
+<a href="https://www.heroku.com/deploy?template=https://github.com/fellix-234/KLAUS-MD">
+  <img src="https://www.herokucdn.com/deploy/button.svg" alt="Deploy to Heroku" height="40" />
+</a>
+&nbsp;
+<a href="https://railway.app/new/template?template=https://github.com/fellix-234/KLAUS-MD">
+  <img src="https://img.shields.io/badge/Deploy%20on-Railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white" alt="Deploy to Railway" height="40" />
+</a>
+
 </div>
 
 ---
 
-## 🚀 Deploy — Pick Your Poison
+## 🔑 Get Your Session
 
-### 🟣 Render (recommended)
+<div align="center">
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/fellix-234/KLAUS-MD)
+<a href="https://klaus-md-i86d.onrender.com/">
+  <img src="https://img.shields.io/badge/🔐_Get-Session-2563EB?style=for-the-badge&logoColor=white" alt="Get Session" height="40" />
+</a>
+&nbsp;
+<a href="https://klaus-md-i86d.onrender.com/export">
+  <img src="https://img.shields.io/badge/📤_Export-Session_String-F97316?style=for-the-badge&logoColor=white" alt="Export Session" height="40" />
+</a>
 
-```yaml
-# render.yaml is included — just connect your repo
-# Set SESSION, OWNER_NUMBER, DEVELOPER_NUMBER in the dashboard
-```
+</div>
 
-### 🟠 Railway
+> 💡 **Heads up:** Generate your session **before** deploying — you'll need the string to connect.
 
-[![Deploy on Railway](https://img.shields.io/badge/Deploy%20on-Railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white)](https://railway.app/new/template?template=https://github.com/fellix-234/KLAUS-MD)
+---
+
+## 🛠️ Quick Setup (Local)
 
 ```bash
-# Or use the CLI
-railway init && railway up
+# 1. Clone the repo
+git clone https://github.com/fellix-234/KLAUS-MD
+cd KLAUS-MD
+
+# 2. Install dependencies
+npm install
+
+# 3. Fire it up
+npm start
 ```
 
-### 🟣 Heroku
+| Requirement | Details |
+| :--- | :--- |
+| **Node.js** | `v18+` (recommended) |
+| **Entry point** | `index.js` |
+| **Session server** | `npm run session` |
 
-[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://www.heroku.com/deploy?template=https://github.com/fellix-234/KLAUS-MD)
+---
 
+## 🧩 Private Source Mode
 
+Want to keep your command code under lock and key? Point the launcher at a private repo:
 
-## 🔑 Session Setup
+```bash
+BOT_SOURCE_DIR=./private-bot npm start
+```
 
-You need a **session string** before deploying. Pick one:
+**Docker builds** also support:
+
+| Build Arg | Purpose |
+| :--- | :--- |
+| `BOT_SOURCE_REPO` | Clone a private source repo |
+| `BOT_SOURCE_BRANCH` | Branch to pull from |
+| `BOT_SOURCE_TOKEN` | Auth token for private repos |
+
+The repo gets cloned into `/app/source` automatically during build.
+
+---
+
+## ✨ Why KLAUS-MD?
 
 <table>
 <tr>
 <td width="50%">
 
-**Option A — Web Generator**
+### 🚀 Speed First
+Built on Baileys — lean, fast, and responsive. No bloat, no lag.
 
-Visit **[klaus-md-i86d.onrender.com](https://klaus-md-i86d.onrender.com/)**
+### 🧠 Clean Architecture
+Structured command folders. Modular design. Grows with you.
 
-1. Enter your WhatsApp number
-2. Copy the pairing code
-3. Link on your phone
-4. Click **Export Session String**
+### ☁️ Multi-Platform
+Deploy on **Render**, **Railway**, **Heroku**, or **Docker** — your pick.
 
 </td>
 <td width="50%">
 
+### 🔗 Easy Sessions
+Generate and link your WhatsApp session in minutes.
 
+### 🎨 Modern Menu
+Status-style menu with a sleek command flow.
+
+### 🧑‍💻 Dev-Friendly
+Quick local startup. Painless customization. Zero friction.
 
 </td>
 </tr>
 </table>
-
-Once you have the string, set it as the `SESSION` env var on your deploy platform. Done.
-
----
-
-## 🛠️ Local Setup
-
-
-
-**You should see:**
-
-```
-╔══════════════════════════════════════════╗
-║   🤖  KLAUS MD                           ║
-║   📱  Number : 254725391914              ║
-║   🟢  Status : ONLINE                    ║
-╚══════════════════════════════════════════╝
-```
-
-Send `.menu` to your bot on WhatsApp. You're live.
-
----
-
-## 📦 What's Inside
-
----
-
-
-
----
-
-Restart. Done. No registration file, no routing setup, no magic.
 
 ---
 
@@ -208,47 +154,41 @@ Restart. Done. No registration file, no routing setup, no magic.
 
 <div align="center">
 
-<img src="./lib/alive.jpg" width="120" style="border-radius: 50%; border: 3px solid #39D353;" alt="Warrior Felix" />
+<img src="./lib/alive.jpg" width="110" style="border-radius: 50%;" alt="Warrior Felix" />
 
 ### **Warrior Felix**
 
-*Builds bots. Breaks things. Fixes them.*
+*Builder of bots. Breaker of limits.*
 
 <a href="https://wa.me/254725391914">
-  <img src="https://img.shields.io/badge/CHAT%20ON%20WHATSAPP-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" />
+  <img src="https://img.shields.io/badge/Chat_on-WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" alt="WhatsApp" />
 </a>
 
 </div>
 
 ---
 
-## 🌟 Support
+## 🌟 Support the Project
 
-If KLAUS-MD saved you an afternoon, return the favor:
+If KLAUS-MD made your life easier, show some love:
 
 <div align="center">
 
 <a href="https://github.com/fellix-234/KLAUS-MD/fork">
-  <img src="https://img.shields.io/badge/1.%20FORK-000?style=for-the-badge&logo=github&logoColor=white" />
+  <img src="https://img.shields.io/badge/1._Fork_it-000?style=for-the-badge&logo=github&logoColor=white" />
 </a>
 <a href="https://github.com/fellix-234/KLAUS-MD/stargazers">
-  <img src="https://img.shields.io/badge/2.%20STAR-FFD700?style=for-the-badge&logo=github&logoColor=black" />
+  <img src="https://img.shields.io/badge/2._Star_it-FFD700?style=for-the-badge&logo=github&logoColor=black" />
 </a>
-<a href="https://wa.me/?text=Check%20out%20KLAUS-MD%20%E2%80%94%20a%20fast%20WhatsApp%20automation%20bot%20https://github.com/fellix-234/KLAUS-MD">
-  <img src="https://img.shields.io/badge/3.%20SHARE-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" />
+<a href="https://wa.me/?text=Check%20out%20KLAUS-MD%20-%20a%20fast%20WhatsApp%20automation%20bot!%20https://github.com/fellix-234/KLAUS-MD">
+  <img src="https://img.shields.io/badge/3._Share_it-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" />
 </a>
-
-<br/><br/>
-
-⭐ **Star this repo if you found it useful** — it helps more people find it.
 
 </div>
 
 ---
 
 <div align="center">
-
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:00C2FF,50:39D353,100:F97316&height=120&section=footer" width="100%" />
 
 **KLAUS-MD** — *Built for speed. Built for reliability. Built for you.*
 
