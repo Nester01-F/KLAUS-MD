@@ -1,4 +1,3 @@
-
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -23,20 +22,36 @@ app.use('/assets', express.static(path.join(__dirname, '..', 'lib')));
 const sessionRoot = path.join(__dirname, 'auth_info_baileys');
 const credsPath = path.join(sessionRoot, 'creds.json');
 const statusPath = path.join(__dirname, '..', 'session_status.json');
+const debugLogPath = path.join(__dirname, '..', 'pairing_debug.log');
 const pairingLabel = String(process.env.PAIRING_LABEL || 'yupradev').trim() || 'yupradev';
 
 let pairingCode = null;
 let socketReady = false;
 let activeSocket = null;
 
-// Serialize pairing requests so concurrent clicks don't race.
+// Serialize requests so concurrent clicks don't race.
 let pairingLock = Promise.resolve();
+
+/* ------------------------------------------------------------------ */
+/* Debug logging                                                       */
+/* ------------------------------------------------------------------ */
+
+function debugLog(...args) {
+  const line = `[${new Date().toISOString()}] ${args.join(' ')}\n`;
+  try {
+    fs.appendFileSync(debugLogPath, line);
+  } catch {
+    /* ignore */
+  }
+  logger.info('[pairing]', ...args);
+}
 
 /* ------------------------------------------------------------------ */
 /* Socket helpers                                                      */
 /* ------------------------------------------------------------------ */
 
-function waitForSocketOpen(sock, timeoutMs = 20000) {
+// ✅ FIX: longer default timeout — Render/Railway cold starts are slow.
+function waitForSocketOpen(sock, timeoutMs = 30_000) {
   return new Promise((resolve, reject) => {
     let settled = false;
 
@@ -49,11 +64,12 @@ function waitForSocketOpen(sock, timeoutMs = 20000) {
     const timer = setTimeout(() => {
       if (settled) return;
       cleanup();
-      reject(new Error('Socket did not open in time. Try again.'));
+      reject(new Error(`Socket did not open within ${timeoutMs}ms.`));
     }, timeoutMs);
 
     const onUpdate = ({ connection, lastDisconnect }) => {
       if (settled) return;
+      debugLog(`connection.update → ${connection}`);
       if (connection === 'open') {
         cleanup();
         resolve();
@@ -73,6 +89,8 @@ function waitForSocketOpen(sock, timeoutMs = 20000) {
   });
 }
 
+// ✅ FIX: status merge now clears stale fields and never writes
+// lastPairingCode on failure.
 function writeStatus(update) {
   let current = {};
   if (fs.existsSync(statusPath)) {
@@ -83,11 +101,13 @@ function writeStatus(update) {
     }
   }
   fs.writeFileSync(statusPath, JSON.stringify({ ...current, ...update }, null, 2));
+  debugLog('status.json →', JSON.stringify(update));
 }
 
 function ensureFreshAuthState(forceReset = false) {
   if (forceReset && fs.existsSync(sessionRoot)) {
     fs.rmSync(sessionRoot, { recursive: true, force: true });
+    debugLog('auth state wiped (forceReset)');
   }
   if (!fs.existsSync(sessionRoot)) {
     fs.mkdirSync(sessionRoot, { recursive: true });
@@ -106,30 +126,8 @@ function closeActiveSocket() {
   socketReady = false;
 }
 
-/* ------------------------------------------------------------------ */
-/* Core pairing logic                                                  */
-/* ------------------------------------------------------------------ */
-
-async function buildSocket(phoneNumber, { forceReset = false } = {}) {
-  ensureFreshAuthState(forceReset);
-
-  // If creds already exist and are valid, skip pairing entirely.
-  if (!forceReset && fs.existsSync(credsPath)) {
-    try {
-      const existing = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
-      if (existing?.me?.id) {
-        socketReady = true;
-        logger.session('Existing session found — no pairing needed.');
-        return activeSocket;
-      }
-    } catch {
-      /* corrupt creds → fall through to fresh pairing */
-    }
-  }
-
-  closeActiveSocket();
-  pairingCode = null;
-
+// ✅ FIX: helper to fully rebuild a socket from scratch.
+async function createSocket() {
   const { state, saveCreds } = await useMultiFileAuthState(sessionRoot);
   const { version } = await fetchLatestBaileysVersion();
 
@@ -139,17 +137,16 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     browser: ['KLAUS Session', 'Chrome', '1.0.0'],
-    keepAliveIntervalMs: 10_000
+    keepAliveIntervalMs: 30_000 // ✅ FIX: was 10s → too aggressive
   });
-  activeSocket = sock;
 
   sock.ev.on('creds.update', saveCreds);
-
   sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+    debugLog(`[${new Date().toISOString()}] global update → ${connection}`);
     if (connection === 'open') {
       socketReady = true;
       logger.session('Session linked successfully.');
-      writeStatus({ linkedAt: new Date().toISOString() });
+      writeStatus({ linkedAt: new Date().toISOString(), lastError: null });
     }
     if (connection === 'close') {
       socketReady = false;
@@ -161,53 +158,124 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
     }
   });
 
-  let lastError = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      // Wait for `open` OR proceed after a short delay — Baileys needs
-      // the noise handshake to settle before accepting a pairing request.
-      await Promise.race([
-        waitForSocketOpen(sock, 20_000),
-        delay(4_000)
-      ]);
+  return sock;
+}
 
+/* ------------------------------------------------------------------ */
+/* Core pairing logic                                                  */
+/* ------------------------------------------------------------------ */
+
+async function buildSocket(phoneNumber, { forceReset = false } = {}) {
+  ensureFreshAuthState(forceReset);
+
+  // If creds already exist and are valid, skip pairing.
+  if (!forceReset && fs.existsSync(credsPath)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+      if (existing?.me?.id) {
+        socketReady = true;
+        logger.session('Existing session found — no pairing needed.');
+        return activeSocket;
+      }
+    } catch {
+      /* corrupt → continue to fresh pairing */
+    }
+  }
+
+  closeActiveSocket();
+  pairingCode = null;
+
+  const attempts = [];
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const startedAt = Date.now();
+
+    try {
+      // ✅ FIX: always rebuild the socket per attempt. Reusing a half-dead
+      // socket is the #1 cause of null pairing codes.
+      if (attempt > 1 || forceReset) {
+        ensureFreshAuthState(true);
+      }
+      activeSocket = await createSocket();
+
+      // ✅ FIX: wait longer for open (10s) before falling back to request.
+      await Promise.race([
+        waitForSocketOpen(activeSocket, 30_000),
+        delay(10_000)
+      ]);
       await delay(800 * attempt);
-      const code = await sock.requestPairingCode(phoneNumber);
+
+      debugLog(`attempt ${attempt}: requesting pairing code for ${phoneNumber}`);
+      const code = await activeSocket.requestPairingCode(phoneNumber);
+      debugLog(`attempt ${attempt}: code = ${code || '(empty)'}`);
+
       if (!code) throw new Error('Empty pairing code returned.');
+
       pairingCode = code;
+      attempts.push({ attempt, ok: true, ms: Date.now() - startedAt });
       lastError = null;
       break;
     } catch (err) {
       lastError = err;
-      logger.warn(`Pairing attempt ${attempt}/3 failed: ${err.message}`);
-      if (attempt < 3 && err.message.includes('closed')) {
-        // Rebuild auth state on transport-level failures.
-        closeActiveSocket();
-        ensureFreshAuthState(true);
-      }
+      attempts.push({
+        attempt,
+        ok: false,
+        ms: Date.now() - startedAt,
+        error: err.message
+      });
+      debugLog(`attempt ${attempt} failed: ${err.message}`);
+      closeActiveSocket();
     }
   }
 
+  // ✅ FIX: write failure status WITHOUT lastPairingCode, and include error.
   if (!pairingCode) {
+    writeStatus({
+      generatedAt: new Date().toISOString(),
+      lastPairingCode: null,
+      lastError: lastError?.message || 'unknown',
+      pairingAttempts: attempts
+    });
     throw new Error(lastError?.message || 'Unable to generate pairing code. Try again.');
   }
 
+  // ✅ FIX: only write lastPairingCode on success.
   logger.session(`Pairing session ready for ${phoneNumber} (${pairingLabel})`);
   writeStatus({
     generatedAt: new Date().toISOString(),
     lastPairingCode: pairingCode,
-    pairingLabel
+    pairingLabel,
+    lastError: null,
+    pairingAttempts: attempts
   });
 
-  return sock;
+  return activeSocket;
 }
 
 async function exportSessionBase64() {
-  if (!fs.existsSync(credsPath)) return null;
-  const raw = fs.readFileSync(credsPath, 'utf-8');
-  const base64 = Buffer.from(raw, 'utf-8').toString('base64');
-  writeStatus({ lastSessionLength: base64.length });
-  return base64;
+  if (!fs.existsSync(credsPath)) {
+    writeStatus({ lastSessionLength: null, lastExportError: 'creds.json missing' });
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(credsPath, 'utf-8').trim();
+    if (!raw) {
+      // ✅ FIX: detect empty/corrupt creds — this is why you saw length 0.
+      writeStatus({
+        lastSessionLength: 0,
+        lastExportError: 'creds.json is empty (pairing never completed)'
+      });
+      return null;
+    }
+    const base64 = Buffer.from(raw, 'utf-8').toString('base64');
+    writeStatus({ lastSessionLength: base64.length, lastExportError: null });
+    return base64;
+  } catch (err) {
+    writeStatus({ lastExportError: err.message });
+    return null;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -239,7 +307,7 @@ app.post('/generate', async (req, res) => {
       res.json({
         ok: true,
         pairingCode,
-        info: 'Open WhatsApp → Linked devices → Link with phone number and use this code.'
+        info: 'Open WhatsApp → Linked devices → Link with phone number.'
       });
     } catch (err) {
       logger.error(`Session generation failed: ${err.message}`);
@@ -247,7 +315,6 @@ app.post('/generate', async (req, res) => {
     }
   };
 
-  // Serialize requests so rapid clicks don't invalidate each other.
   pairingLock = pairingLock.then(run, run);
   await pairingLock;
 });
@@ -265,7 +332,10 @@ app.get('/status', async (_, res) => {
 app.get('/export', async (_, res) => {
   const base64 = await exportSessionBase64();
   if (!base64) {
-    res.status(404).json({ ok: false, error: 'No creds.json found yet. Pair first.' });
+    res.status(404).json({
+      ok: false,
+      error: 'No valid creds.json found. Complete pairing first.'
+    });
     return;
   }
   res.json({ ok: true, session: base64 });
@@ -303,11 +373,8 @@ function buildHtml() {
     --mono: 'Fira Code', 'Courier New', monospace;
     --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
-
   * { margin: 0; padding: 0; box-sizing: border-box; }
-
   html, body { height: 100%; }
-
   body {
     font-family: var(--sans);
     color: var(--text);
@@ -322,8 +389,6 @@ function buildHtml() {
     position: relative;
     overflow-x: hidden;
   }
-
-  /* Animated grid background */
   body::before {
     content: '';
     position: fixed;
@@ -337,15 +402,7 @@ function buildHtml() {
     pointer-events: none;
     z-index: 0;
   }
-
-  .wrap {
-    position: relative;
-    z-index: 1;
-    max-width: 720px;
-    margin: 0 auto;
-  }
-
-  /* Hero card */
+  .wrap { position: relative; z-index: 1; max-width: 720px; margin: 0 auto; }
   .hero {
     position: relative;
     border-radius: 24px;
@@ -364,7 +421,6 @@ function buildHtml() {
     overflow: hidden;
     margin-bottom: 22px;
   }
-
   .hero::after {
     content: '';
     position: absolute;
@@ -373,7 +429,6 @@ function buildHtml() {
     background: linear-gradient(90deg, transparent, var(--accent), transparent);
     opacity: 0.7;
   }
-
   .avatar-ring {
     display: inline-block;
     padding: 3px;
@@ -382,21 +437,15 @@ function buildHtml() {
     animation: spin 8s linear infinite;
     margin-bottom: 14px;
   }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
+  @keyframes spin { to { transform: rotate(360deg); } }
   .avatar {
-    width: 96px;
-    height: 96px;
+    width: 96px; height: 96px;
     border-radius: 999px;
     object-fit: cover;
     display: block;
     border: 3px solid var(--bg-1);
     background: var(--bg-2);
   }
-
   .brand {
     font-family: var(--mono);
     font-weight: 700;
@@ -408,21 +457,8 @@ function buildHtml() {
     background-clip: text;
     color: transparent;
   }
-
-  .tagline {
-    color: var(--muted);
-    font-size: 14px;
-    margin-bottom: 18px;
-  }
-
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
-    margin-bottom: 18px;
-  }
-
+  .tagline { color: var(--muted); font-size: 14px; margin-bottom: 18px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 18px; }
   .chip {
     font-family: var(--mono);
     font-size: 12px;
@@ -435,21 +471,17 @@ function buildHtml() {
     align-items: center;
     gap: 6px;
   }
-
   .chip .dot {
-    width: 6px;
-    height: 6px;
+    width: 6px; height: 6px;
     border-radius: 999px;
     background: var(--accent-2);
     box-shadow: 0 0 10px var(--accent-2);
     animation: pulse 1.6s ease-in-out infinite;
   }
-
   @keyframes pulse {
     0%, 100% { opacity: 1; transform: scale(1); }
     50% { opacity: 0.5; transform: scale(0.8); }
   }
-
   .clock {
     display: inline-block;
     font-family: var(--mono);
@@ -461,8 +493,6 @@ function buildHtml() {
     border-radius: 999px;
     margin-bottom: 20px;
   }
-
-  /* Buttons */
   .btn {
     display: inline-flex;
     align-items: center;
@@ -483,38 +513,27 @@ function buildHtml() {
     box-shadow: 0 8px 24px -8px rgba(0, 194, 255, 0.6);
     position: relative;
   }
-
   .btn:hover { transform: translateY(-2px); filter: brightness(1.05); }
   .btn:active { transform: translateY(0); }
   .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
-
   .btn.ghost {
     background: transparent;
     color: var(--text);
     border: 1px solid var(--stroke-strong);
     box-shadow: none;
   }
-
-  .btn.ghost:hover {
-    background: rgba(0, 194, 255, 0.06);
-    border-color: var(--accent);
-  }
-
+  .btn.ghost:hover { background: rgba(0, 194, 255, 0.06); border-color: var(--accent); }
   .btn.warn {
     background: linear-gradient(135deg, #f97316, #ff5d6c);
     color: #1a0800;
   }
-
   .btn .spinner {
-    width: 16px;
-    height: 16px;
+    width: 16px; height: 16px;
     border-radius: 999px;
     border: 2px solid rgba(4, 18, 32, 0.3);
     border-top-color: #041220;
     animation: spin 0.8s linear infinite;
   }
-
-  /* Panels */
   .panel {
     background: var(--card);
     border: 1px solid var(--stroke);
@@ -525,22 +544,13 @@ function buildHtml() {
     box-shadow: 0 20px 60px -30px rgba(0, 0, 0, 0.8);
     animation: rise 0.4s ease;
   }
-
   @keyframes rise {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
   }
-
-  .step-head {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-  }
-
+  .step-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
   .step-num {
-    width: 30px;
-    height: 30px;
+    width: 30px; height: 30px;
     border-radius: 999px;
     display: inline-flex;
     align-items: center;
@@ -552,13 +562,7 @@ function buildHtml() {
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     box-shadow: 0 0 20px rgba(0, 194, 255, 0.5);
   }
-
-  .step-title {
-    font-size: 16px;
-    font-weight: 700;
-    letter-spacing: 0.2px;
-  }
-
+  .step-title { font-size: 16px; font-weight: 700; letter-spacing: 0.2px; }
   .hint {
     font-size: 13px;
     color: var(--muted);
@@ -569,15 +573,8 @@ function buildHtml() {
     border-radius: 6px;
     line-height: 1.5;
   }
-
   .hint strong { color: var(--text); }
-
-  /* Input */
-  .field {
-    position: relative;
-    margin-bottom: 14px;
-  }
-
+  .field { position: relative; margin-bottom: 14px; }
   .field input {
     width: 100%;
     padding: 16px 18px;
@@ -589,16 +586,12 @@ function buildHtml() {
     border-radius: 12px;
     transition: border-color 0.2s, box-shadow 0.2s;
   }
-
   .field input:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 4px rgba(0, 194, 255, 0.12);
   }
-
   .field input::placeholder { color: rgba(138, 164, 196, 0.5); }
-
-  /* Pairing code display */
   .code-card {
     margin-top: 8px;
     padding: 22px;
@@ -610,7 +603,6 @@ function buildHtml() {
     text-align: center;
     box-shadow: 0 0 60px -20px rgba(57, 211, 83, 0.4);
   }
-
   .code-label {
     font-size: 12px;
     text-transform: uppercase;
@@ -618,7 +610,6 @@ function buildHtml() {
     color: var(--muted);
     margin-bottom: 12px;
   }
-
   .code-value {
     font-family: var(--mono);
     font-size: clamp(24px, 6vw, 34px);
@@ -634,9 +625,7 @@ function buildHtml() {
     border-radius: 8px;
     transition: background 0.2s;
   }
-
   .code-value:hover { background: rgba(57, 211, 83, 0.06); }
-
   .steps-list {
     text-align: left;
     font-size: 13px;
@@ -648,7 +637,6 @@ function buildHtml() {
     border: 1px solid var(--stroke);
     margin-top: 12px;
   }
-
   .steps-list strong { color: var(--text); }
   .steps-list code {
     font-family: var(--mono);
@@ -658,8 +646,6 @@ function buildHtml() {
     color: #9fe8ff;
     font-size: 12px;
   }
-
-  /* Session output */
   .session-box {
     margin-top: 16px;
     border-radius: 12px;
@@ -668,7 +654,6 @@ function buildHtml() {
     padding: 14px;
     animation: rise 0.3s ease;
   }
-
   .session-box textarea {
     width: 100%;
     min-height: 110px;
@@ -683,10 +668,7 @@ function buildHtml() {
     line-height: 1.5;
     margin-bottom: 10px;
   }
-
   .session-box textarea:focus { outline: none; border-color: var(--accent-3); }
-
-  /* Alerts */
   .alert {
     margin-top: 14px;
     padding: 12px 14px;
@@ -698,33 +680,18 @@ function buildHtml() {
     align-items: flex-start;
     animation: rise 0.3s ease;
   }
-
   .alert.error {
     background: rgba(255, 93, 108, 0.08);
     border: 1px solid rgba(255, 93, 108, 0.3);
     color: #ffb3bb;
   }
-
   .alert.success {
     background: rgba(57, 211, 83, 0.08);
     border: 1px solid rgba(57, 211, 83, 0.3);
     color: #b6f7c1;
   }
-
-  .alert .ico {
-    font-size: 15px;
-    flex-shrink: 0;
-    margin-top: 1px;
-  }
-
-  /* Status pills */
-  .status-row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 16px;
-  }
-
+  .alert .ico { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
+  .status-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
   .status-pill {
     font-family: var(--mono);
     font-size: 11px;
@@ -734,18 +701,13 @@ function buildHtml() {
     border: 1px solid var(--stroke);
     color: var(--muted);
   }
-
   .status-pill.ok {
     color: var(--accent-2);
     border-color: rgba(57, 211, 83, 0.4);
     background: rgba(57, 211, 83, 0.06);
   }
-
-  /* Utility */
   .hidden { display: none !important; }
   .mt { margin-top: 18px; }
-  .mt-sm { margin-top: 10px; }
-
   .footer {
     text-align: center;
     font-size: 12px;
@@ -753,10 +715,8 @@ function buildHtml() {
     margin-top: 24px;
     font-family: var(--mono);
   }
-
   .footer a { color: var(--accent); text-decoration: none; }
   .footer a:hover { text-decoration: underline; }
-
   @media (max-width: 480px) {
     .hero { padding: 28px 20px 24px; }
     .brand { font-size: 24px; }
@@ -767,8 +727,6 @@ function buildHtml() {
 </head>
 <body>
 <div class="wrap">
-
-  <!-- HERO -->
   <div class="hero">
     <div class="avatar-ring">
       <img src="/assets/menu.jpg" alt="avatar" class="avatar" onerror="this.style.display='none';this.parentElement.style.display='none'" />
@@ -781,55 +739,37 @@ function buildHtml() {
       <span class="chip">Baileys</span>
     </div>
     <div id="clock" class="clock">--:--:--</div>
-    <button class="btn" onclick="goToPairing()">
-      🔗 Get Session
-    </button>
+    <button class="btn" onclick="goToPairing()">🔗 Get Session</button>
   </div>
 
-  <!-- STEP 1 -->
   <div id="step1" class="panel">
     <div class="step-head">
       <span class="step-num">1</span>
       <span class="step-title">Enter Your WhatsApp Number</span>
     </div>
-
     <div class="hint">
       Include your country code <strong>without</strong> the <code>+</code> sign.<br/>
       Example: <code>254725391914</code>
     </div>
-
     <div class="field">
-      <input
-        type="tel"
-        id="phoneInput"
-        placeholder="254725391914"
-        inputmode="numeric"
-        autocomplete="off"
-      />
+      <input type="tel" id="phoneInput" placeholder="254725391914" inputmode="numeric" autocomplete="off" />
     </div>
-
-    <button class="btn" id="genBtn" onclick="generateCode()">
-      ⚡ Generate Pairing Code
-    </button>
-
+    <button class="btn" id="genBtn" onclick="generateCode()">⚡ Generate Pairing Code</button>
     <div id="error" class="alert error hidden">
       <span class="ico">⚠️</span>
       <span id="errorText"></span>
     </div>
   </div>
 
-  <!-- STEP 2 -->
   <div id="step2" class="panel hidden">
     <div class="step-head">
       <span class="step-num">2</span>
       <span class="step-title">Link Your Device</span>
     </div>
-
     <div class="code-card">
       <div class="code-label">Your Pairing Code</div>
       <div class="code-value" id="codeDisplay" onclick="copyPairingCode()" title="Click to copy"></div>
       <button class="btn ghost" onclick="copyPairingCode()">📋 Copy Code</button>
-
       <div class="steps-list">
         <strong>On your phone:</strong><br/>
         1. Open <strong>WhatsApp</strong><br/>
@@ -844,16 +784,10 @@ function buildHtml() {
         <span class="step-num">3</span>
         <span class="step-title">Export Session String</span>
       </div>
-
       <div class="hint">
-        After linking succeeds on your phone, tap the button below to export your
-        session credentials.
+        After linking succeeds on your phone, tap the button below to export your session credentials.
       </div>
-
-      <button class="btn warn" id="exportBtn" onclick="exportSession()">
-        📤 Export Session String
-      </button>
-
+      <button class="btn warn" id="exportBtn" onclick="exportSession()">📤 Export Session String</button>
       <div id="sessionResult" class="session-box hidden">
         <div class="code-label" style="text-align:left;">Session String</div>
         <textarea id="sessionValue" readonly></textarea>
@@ -865,7 +799,6 @@ function buildHtml() {
       <button class="btn ghost" onclick="startOver()">🔄 Start Over</button>
       <button class="btn ghost" onclick="refreshStatus()">📡 Check Status</button>
     </div>
-
     <div id="statusPills" class="status-row">
       <span class="status-pill" id="pillLink">⏳ Waiting for link...</span>
     </div>
@@ -877,17 +810,13 @@ function buildHtml() {
 </div>
 
 <script>
-  /* ---------- helpers ---------- */
   const $ = (id) => document.getElementById(id);
-
   function showError(msg) {
     $('errorText').textContent = msg;
     $('error').classList.remove('hidden');
     setTimeout(() => $('error').classList.add('hidden'), 6000);
   }
-
   function hideError() { $('error').classList.add('hidden'); }
-
   function setLoading(btn, on, label) {
     if (on) {
       btn.dataset.original = btn.innerHTML;
@@ -898,7 +827,6 @@ function buildHtml() {
       btn.disabled = false;
     }
   }
-
   async function copyText(text) {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
@@ -914,8 +842,6 @@ function buildHtml() {
     document.execCommand('copy');
     document.body.removeChild(el);
   }
-
-  /* ---------- clock ---------- */
   function updateClock() {
     const now = new Date();
     $('clock').textContent = now.toLocaleString('en-KE', {
@@ -925,14 +851,10 @@ function buildHtml() {
   }
   updateClock();
   setInterval(updateClock, 1000);
-
-  /* ---------- navigation ---------- */
   function goToPairing() {
     $('step1').scrollIntoView({ behavior: 'smooth', block: 'center' });
     setTimeout(() => $('phoneInput').focus(), 400);
   }
-
-  /* ---------- pairing code ---------- */
   async function generateCode() {
     hideError();
     const phone = $('phoneInput').value.replace(/[^0-9]/g, '');
@@ -940,10 +862,8 @@ function buildHtml() {
       showError('Please enter a valid phone number with country code (10–15 digits).');
       return;
     }
-
     const btn = $('genBtn');
     setLoading(btn, true, 'Generating...');
-
     try {
       const res = await fetch('/generate', {
         method: 'POST',
@@ -951,7 +871,6 @@ function buildHtml() {
         body: 'number=' + encodeURIComponent(phone)
       });
       const data = await res.json();
-
       if (data.ok) {
         $('codeDisplay').textContent = data.pairingCode;
         $('step1').classList.add('hidden');
@@ -966,7 +885,6 @@ function buildHtml() {
       setLoading(btn, false);
     }
   }
-
   async function copyPairingCode() {
     const code = $('codeDisplay').textContent.trim();
     if (!code) return showError('No pairing code yet.');
@@ -978,12 +896,8 @@ function buildHtml() {
         btn.innerHTML = '✅ Copied!';
         setTimeout(() => { btn.innerHTML = orig; }, 1500);
       }
-    } catch (e) {
-      showError('Copy failed: ' + e.message);
-    }
+    } catch (e) { showError('Copy failed: ' + e.message); }
   }
-
-  /* ---------- session export ---------- */
   async function exportSession() {
     const btn = $('exportBtn');
     setLoading(btn, true, 'Exporting...');
@@ -1002,7 +916,6 @@ function buildHtml() {
       setLoading(btn, false);
     }
   }
-
   async function copySession() {
     const session = $('sessionValue').value;
     if (!session) return showError('No session string to copy.');
@@ -1014,27 +927,17 @@ function buildHtml() {
         btn.innerHTML = '✅ Copied!';
         setTimeout(() => { btn.innerHTML = orig; }, 1500);
       }
-    } catch (e) {
-      showError('Copy failed: ' + e.message);
-    }
+    } catch (e) { showError('Copy failed: ' + e.message); }
   }
-
-  /* ---------- status polling ---------- */
   let statusTimer = null;
-
   function startStatusPolling() {
     if (statusTimer) return;
     statusTimer = setInterval(refreshStatus, 4000);
     refreshStatus();
   }
-
   function stopStatusPolling() {
-    if (statusTimer) {
-      clearInterval(statusTimer);
-      statusTimer = null;
-    }
+    if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
   }
-
   async function refreshStatus() {
     try {
       const res = await fetch('/status');
@@ -1048,23 +951,14 @@ function buildHtml() {
         pill.textContent = '⏳ Waiting for link...';
         pill.classList.remove('ok');
       }
-    } catch {
-      /* ignore transient errors */
-    }
+    } catch { /* ignore */ }
   }
-
-  /* ---------- reset ---------- */
   async function startOver() {
     const phone = $('phoneInput').value.replace(/[^0-9]/g, '');
-    if (!phone) {
-      resetUi();
-      return;
-    }
-
+    if (!phone) { resetUi(); return; }
     const btn = event.target.closest('button');
     setLoading(btn, true, 'Resetting...');
     try {
-      // Call /generate with reset=1 — wipes auth state and issues a fresh code.
       const res = await fetch('/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1086,7 +980,6 @@ function buildHtml() {
       setLoading(btn, false);
     }
   }
-
   function resetUi() {
     $('phoneInput').value = '';
     hideError();
@@ -1097,8 +990,6 @@ function buildHtml() {
     stopStatusPolling();
     $('phoneInput').focus();
   }
-
-  /* ---------- init ---------- */
   $('phoneInput').focus();
   $('phoneInput').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') generateCode();
