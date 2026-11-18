@@ -1,8 +1,9 @@
 services:
-  - type: web
+  # ─── WhatsApp Bot (worker — no HTTP port needed) ───
+  - type: worker
     name: klaus-md
-    env: node
-    plan: free
+    runtime: node
+    plan: starter          # use 'free' only for testing
     buildCommand: npm install
     startCommand: node index.js
     autoDeploy: true
@@ -17,7 +18,32 @@ services:
         value: .
       - key: BOT_NAME
         value: KLAUS MD
-      - key: BOT_SOURCE_DIR
-        value: /app/source
-      - key: PORT
-        value: 3000
+      - key: OWNER_NAME
+        value: Warrior Felix
+      - key: DEVELOPER_NAME
+        value: Warrior Felix
+      # Secrets — set these in the Render dashboard
+      - key: SESSION
+        sync: false
+      - key: OWNER_NUMBER
+        sync: false
+      - key: DEVELOPER_NUMBER
+        sync: false
+
+  # ─── Session Pairing Server (web — serves pairing page) ───
+  - type: web
+    name: klaus-md-session
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node session.js
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: SESSION_SERVER_PORT
+        value: 3001
+      - key: BOT_NAME
+        value: KLAUS MD
+      - key: PAIRING_LABEL
+        value: yupradev
