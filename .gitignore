@@ -1,7 +1,28 @@
+# ─── Dependencies ───
 node_modules/
-session/auth_info_baileys/
+
+# ─── Build output ───
 dist/
+
+# ─── Environment secrets ───
+.env
+.env.*
+!.env.example
+
+# ─── WhatsApp auth state (NEVER commit) ───
+auth_info_baileys/
+session/auth_info_baileys/
+
+# ─── Runtime files ───
+session_status.json
+pairing_debug.log
 *.log
+
+# ─── Editor / OS junk ───
 .vscode/
+.idea/
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
 npm-debug.log*
