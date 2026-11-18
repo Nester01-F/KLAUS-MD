@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "session": "node session.js",
+    "session": "node session/session-server.js",
     "dev": "node --watch index.js"
   },
   "dependencies": {
