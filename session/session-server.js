@@ -97,7 +97,7 @@ async function createSocket() {
       if (sock.intentionalClose) return;
 
       const code = lastDisconnect?.error?.output?.statusCode;
-      debugLog('closed with status', String(code));
+      debugLog('closed with status', String(code),'|', lastDisconnect?.error?.message);
 
       if (code === DisconnectReason.loggedOut) {
         logger.warn('Session logged out — creds are no longer valid.');
