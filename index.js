@@ -2,11 +2,14 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const pino = require('pino');
+const readline = require('readline');
+const QRCode = require('qrcode'); // We need this to print the QR code cleanly
+
 const {
   default: makeWASocket,
   DisconnectReason,
   useMultiFileAuthState,
-  fetchLatestWaWebVersion, // FIXED: Using Web version for valid pairing codes
+  fetchLatestWaWebVersion,
   delay
 } = require('@whiskeysockets/baileys');
 
@@ -18,7 +21,6 @@ const { clearExpiredSessions, handleMenuReply } = require('./commands/menuHandle
 
 const externalSourceDir = resolveSourceDir();
 
-// Note: Top-level 'return' is invalid in Node.js modules. Wrapped in function.
 function startApplication() {
   if (externalSourceDir) {
     require(path.join(externalSourceDir, 'index.js'));
@@ -117,48 +119,40 @@ function startApplication() {
     }, 60 * 60 * 1000);
   }
 
-  const SESSION_PREFIX = 'blinder~';
-
-  async function downloadSession() {
-    const session = ENV.SESSION || process.env.SESSION;
-    if (!session || !session.startsWith(SESSION_PREFIX)) {
-      logger.info('No valid SESSION variable found. Using existing session folder if available.');
-      return false;
-    }
-    try {
-      const megaFileId = session.replace(SESSION_PREFIX, '');
-      logger.info(`Downloading session from MEGA: ${megaFileId}`);
-      const { File } = require('megajs');
-      const file = File.fromURL(`https://mega.nz/file/${megaFileId}`);
-      const credsData = await new Promise((resolve, reject) => {
-        file.loadAttributes((err) => {
-          if (err) return reject(err);
-          file.download((err, data) => {
-            if (err) return reject(err);
-            resolve(data);
-          });
-        });
-      });
-      fs.mkdirSync(authDir, { recursive: true });
-      fs.writeFileSync(path.join(authDir, 'creds.json'), credsData);
-      logger.success('Session downloaded from MEGA and saved to auth folder.');
-      return true;
-    } catch (error) {
-      logger.error(`Session download failed: ${error.message}`);
-      return false;
-    }
-  }
+  
 
   async function ensureAuthFromSession() {
     const credsPath = path.join(authDir, 'creds.json');
+    
+    // 1. Check if we already have a local session
     if (fs.existsSync(credsPath) && fs.statSync(credsPath).size > 0) {
-      logger.info('Existing session found. Skipping download.');
+      logger.info('Existing local session found. Skipping decoding.');
       return;
     }
-    const downloaded = await downloadSession();
-    if (!downloaded) logger.warn('No valid session available. Bot will require pairing code.');
-  }
 
+    // 2. Check if we have a Base64 SESSION env variable
+    const sessionData = ENV.SESSION || process.env.SESSION;
+    if (!sessionData) {
+      logger.warn('No local session or SESSION environment variable found. Bot will require pairing code.');
+      return;
+    }
+
+    try {
+      logger.info('Decoding SESSION variable...');
+      // Decode Base64 back to JSON
+      const decodedJson = Buffer.from(sessionData, 'base64').toString('utf-8');
+      
+      // Verify it's valid JSON before writing
+      JSON.parse(decodedJson); 
+
+      fs.mkdirSync(authDir, { recursive: true });
+      fs.writeFileSync(credsPath, decodedJson);
+      logger.success('Session loaded from SESSION environment variable!');
+    } catch (error) {
+      logger.error(`Failed to load SESSION variable: ${error.message}`);
+      logger.warn('Make sure the SESSION variable is a valid Base64 string.');
+    }
+  }
   async function sendStatusLike(chatId, text, quoted, options = {}) {
     const settings = getBotSettings();
     const typingMs = options.typingMs ?? 900;
@@ -197,8 +191,6 @@ function startApplication() {
     logger.step(3, 6, 'Preparing Baileys auth and socket');
     await ensureAuthFromSession();
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
-    
-    // FIXED: Use Web version for better pairing
     const { version } = await fetchLatestWaWebVersion();
     logger.step(4, 6, `Protocol version ${version.join('.')}`);
 
@@ -212,30 +204,28 @@ function startApplication() {
       browser: ['KLAUS MD', 'Desktop', '1.0.0']
     });
 
-    if (!sock.authState.creds.registered) {
-      logger.warn('🔑 No active session detected.');
-      logger.info('Requesting WhatsApp pairing code...');
-      const phoneNumber = ENV.PAIR_NUMBER || ENV.OWNER_NUMBER;
-
-      if (!phoneNumber) {
-        logger.error('❌ No phone number found for pairing! Add PAIR_NUMBER=2547xxxxxxx in env.');
-      } else {
-        try {
-          await delay(3000);
-          const code = await sock.requestPairingCode(phoneNumber);
-          logger.success(`📲 Pairing code: ${code}`);
-          logger.info('Open WhatsApp > Linked devices > Link with code');
-        } catch (err) {
-          logger.error('Failed to get pairing code: ' + err);
-        }
-      }
-    }
-
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect } = update;
+      const { connection, lastDisconnect, qr } = update;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
+
+      // Handle QR Code Generation
+      if (qr) {
+        console.log('\n=============================================');
+        console.log('SCAN THIS QR CODE WITH YOUR WHATSAPP:');
+        console.log('WhatsApp > Linked Devices > Link a Device\n');
+        try {
+          // Prints the QR code in the terminal
+          await QRCode.toString(qr, { type: 'terminal', small: true }, (err, string) => {
+            if (err) return console.error(err);
+            console.log(string);
+          });
+        } catch (err) {
+          console.log('Failed to generate terminal QR. Using raw string:', qr);
+        }
+        return;
+      }
 
       if (connection === 'connecting') {
         logger.connection('🔄 Connecting to WhatsApp servers...');
