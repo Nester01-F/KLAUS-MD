@@ -200,9 +200,9 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
       // Wait for connection to stabilize before requesting code
       await Promise.race([
         waitForSocketOpen(activeSocket, 30_000),
-        delay(10_000)
+        delay(15_000)
       ]);
-      await delay(1500 * attempt); // Give it a bit more time
+      await delay(3000); // Give it a bit more time
 
       debugLog(`attempt ${attempt}: requesting pairing code for ${phoneNumber}`);
       const code = await activeSocket.requestPairingCode(phoneNumber);
