@@ -5,7 +5,7 @@ const pino = require('pino');
 
 const {
   default: makeWASocket,
-  fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion, // FIXED: Replaced fetchLatestBaileysVersion
   useMultiFileAuthState,
   delay,
   DisconnectReason
@@ -125,7 +125,9 @@ function closeActiveSocket() {
 
 async function createSocket() {
   const { state, saveCreds } = await useMultiFileAuthState(sessionRoot);
-  const { version } = await fetchLatestBaileysVersion();
+  
+  // FIXED: Using WaWebVersion for accurate pairing
+  const { version } = await fetchLatestWaWebVersion();
 
   const sock = makeWASocket({
     version,
@@ -192,11 +194,12 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
       }
       activeSocket = await createSocket();
 
+      // Wait for connection to stabilize before requesting code
       await Promise.race([
         waitForSocketOpen(activeSocket, 30_000),
         delay(10_000)
       ]);
-      await delay(800 * attempt);
+      await delay(1500 * attempt); // Give it a bit more time
 
       debugLog(`attempt ${attempt}: requesting pairing code for ${phoneNumber}`);
       const code = await activeSocket.requestPairingCode(phoneNumber);
