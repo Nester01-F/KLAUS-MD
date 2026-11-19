@@ -5,7 +5,6 @@ const pino = require('pino');
 
 const {
   default: makeWASocket,
-  fetchLatestWaWebVersion, // FIXED: Replaced fetchLatestBaileysVersion
   useMultiFileAuthState,
   delay,
   DisconnectReason
