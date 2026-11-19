@@ -5,7 +5,7 @@ const pino = require('pino');
 
 const {
   default: makeWASocket,
-  fetchLatestWaWebVersion, // FIXED: Live fetch for the correct WhatsApp version
+  fetchLatestWaWebVersion, // FIXED: Gets the live accepted version
   useMultiFileAuthState,
   delay,
   DisconnectReason
@@ -66,7 +66,7 @@ function closeActiveSocket() {
 async function createSocket() {
   const { state, saveCreds } = await useMultiFileAuthState(sessionRoot);
   
-  // FIXED: Uses the live WhatsApp Web version instead of a hardcoded, stale version
+  // FIXED: Fetches the exact WhatsApp Web version right now, preventing rejection
   const { version } = await fetchLatestWaWebVersion({});
 
   const sock = makeWASocket({
@@ -121,7 +121,7 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
   return new Promise((resolve, reject) => {
     const globalTimeout = setTimeout(() => {
       closeActiveSocket();
-      reject(new Error('Pairing timed out. WhatsApp may have rate-limited this IP. Wait 30 mins and try again.'));
+      reject(new Error('Pairing timed out. WhatsApp may have rate-limited your IP. Wait 30 mins and try again.'));
     }, 45000);
 
     createSocket().then((sock) => {
@@ -231,7 +231,7 @@ app.get('/export', async (_, res) => {
 });
 
 /* ------------------------------------------------------------------ */
-/* HTML UI (Upgraded Cyberpunk Design)                                 */
+/* HTML UI                                                             */
 /* ------------------------------------------------------------------ */
 
 function buildHtml() {
@@ -274,7 +274,6 @@ function buildHtml() {
     min-height: 100vh; padding: 20px;
   }
 
-  /* Subtle background grid animation */
   body::before {
     content: ''; position: fixed; inset: 0;
     background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
@@ -382,8 +381,7 @@ function buildHtml() {
     background: rgba(0,0,0,0.6); border: 1px solid rgba(16, 185, 129, 0.3);
     border-radius: 10px; padding: 24px 16px; text-align: center; margin-bottom: 20px;
     box-shadow: inset 0 0 30px rgba(16, 185, 129, 0.05), 0 0 20px rgba(16, 185, 129, 0.1);
-    position: relative;
-    animation: slideDown 0.5s ease-out forwards;
+    position: relative; animation: slideDown 0.5s ease-out forwards;
   }
 
   @keyframes slideDown {
@@ -415,9 +413,7 @@ function buildHtml() {
 
   .hidden { display: none !important; }
 
-  .spinner {
-    width: 14px; height: 14px; border: 2px solid rgba(0, 194, 255, 0.2); border-top-color: var(--accent-cyan); border-radius: 50%; animation: spin 1s linear infinite;
-  }
+  .spinner { width: 14px; height: 14px; border: 2px solid rgba(0, 194, 255, 0.2); border-top-color: var(--accent-cyan); border-radius: 50%; animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
