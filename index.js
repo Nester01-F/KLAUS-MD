@@ -1,4 +1,3 @@
-//Here we go
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -7,7 +6,7 @@ const {
   default: makeWASocket,
   DisconnectReason,
   useMultiFileAuthState,
-  fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion, // FIX: Use Web version for reliable pairing
   delay
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
@@ -69,24 +68,33 @@ function getCommandNames() {
 }
 
 function loadCommands() {
+  if (!fs.existsSync(commandsDir)) {
+    logger.warn(`Commands directory not found: ${commandsDir}`);
+    return;
+  }
+  
   const files = fs.readdirSync(commandsDir).filter((file) => file.endsWith('.js') && file !== 'menuHandler.js');
 
   logger.info(`Discovering ${files.length} command module(s) in /commands`);
 
   for (const file of files) {
-    const command = require(path.join(commandsDir, file));
+    try {
+      const command = require(path.join(commandsDir, file));
 
-    if (!command || typeof command.name !== 'string' || typeof command.execute !== 'function') {
-      logger.warn(`Skipped invalid command module: ${file}`);
-      continue;
-    }
-
-    commandMap.set(command.name, command);
-
-    if (Array.isArray(command.aliases)) {
-      for (const alias of command.aliases) {
-        commandMap.set(alias, command);
+      if (!command || typeof command.name !== 'string' || typeof command.execute !== 'function') {
+        logger.warn(`Skipped invalid command module: ${file}`);
+        continue;
       }
+
+      commandMap.set(command.name, command);
+
+      if (Array.isArray(command.aliases)) {
+        for (const alias of command.aliases) {
+          commandMap.set(alias, command);
+        }
+      }
+    } catch (err) {
+      logger.error(`Failed to load command ${file}: ${err.message}`);
     }
   }
 
@@ -95,7 +103,6 @@ function loadCommands() {
 
 function writeSessionStatus(update) {
   let current = {};
-
   if (fs.existsSync(sessionStatusPath)) {
     try {
       current = JSON.parse(fs.readFileSync(sessionStatusPath, 'utf-8'));
@@ -103,7 +110,6 @@ function writeSessionStatus(update) {
       current = {};
     }
   }
-
   const merged = { ...current, ...update };
   fs.writeFileSync(sessionStatusPath, JSON.stringify(merged, null, 2));
 }
@@ -212,7 +218,6 @@ async function downloadSession() {
       });
     });
 
-    // Save the downloaded creds.json to auth directory
     fs.mkdirSync(authDir, { recursive: true });
     const credsPath = path.join(authDir, 'creds.json');
     fs.writeFileSync(credsPath, credsData);
@@ -225,17 +230,15 @@ async function downloadSession() {
 }
 
 async function ensureAuthFromSession() {
-  // If auth folder already has valid creds.json, skip download
   const credsPath = path.join(authDir, 'creds.json');
   if (fs.existsSync(credsPath) && fs.statSync(credsPath).size > 0) {
     logger.info('Existing session found. Skipping download.');
     return;
   }
 
-  // Try downloading from MEGA
   const downloaded = await downloadSession();
   if (!downloaded) {
-    logger.warn('No valid session available. Bot will require QR scanning or pairing code.');
+    logger.warn('No valid session available. Bot will require pairing code.');
   }
 }
 
@@ -305,11 +308,12 @@ function setupKeepAlive() {
 async function startBot() {
   logger.step(3, 6, 'Preparing Baileys auth and socket');
 
-  // Ensure session from MEGA if available
   await ensureAuthFromSession();
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
-  const { version } = await fetchLatestBaileysVersion();
+  
+  // FIX: Use fetchLatestWaWebVersion instead of fetchLatestBaileysVersion
+  const { version } = await fetchLatestWaWebVersion();
 
   logger.step(4, 6, `Protocol version ${version.join('.')}`);
 
@@ -322,65 +326,65 @@ async function startBot() {
     syncFullHistory: false,
     browser: ['KLAUS MD', 'Desktop', '1.0.0']
   });
-// ===== PAIRING CODE LOGIN =====
-if (!sock.authState.creds.registered) {
-  logger.warn('🔑 No active session detected.');
-  logger.info('Requesting WhatsApp pairing code...');
 
-  const phoneNumber = ENV.PAIR_NUMBER || ENV.OWNER_NUMBER;
+  // ===== PAIRING CODE LOGIN =====
+  if (!sock.authState.creds.registered) {
+    logger.warn('🔑 No active session detected.');
+    logger.info('Requesting WhatsApp pairing code...');
 
-  if (!phoneNumber) {
-    logger.error('❌ No phone number found for pairing!');
-    logger.error('Add PAIR_NUMBER=2547xxxxxxx in env.');
-  } else {
-    try {
-      const code = await sock.requestPairingCode(phoneNumber);
-      logger.success(`📲 Pairing code: ${code}`);
-      logger.info('Open WhatsApp > Linked devices > Link with code');
-    } catch (err) {
-      logger.error('Failed to get pairing code: ' + err);
+    const phoneNumber = ENV.PAIR_NUMBER || ENV.OWNER_NUMBER;
+
+    if (!phoneNumber) {
+      logger.error('❌ No phone number found for pairing!');
+      logger.error('Add PAIR_NUMBER=2547xxxxxxx in env.');
+    } else {
+      try {
+        // Wait a tiny bit to ensure socket is ready before requesting code
+        await delay(3000);
+        const code = await sock.requestPairingCode(phoneNumber);
+        logger.success(`📲 Pairing code: ${code}`);
+        logger.info('Open WhatsApp > Linked devices > Link with code');
+      } catch (err) {
+        logger.error('Failed to get pairing code: ' + err);
+      }
     }
   }
-              }
+
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async (update) => {
-  const { connection, lastDisconnect } = update;
-const statusCode = lastDisconnect?.error?.output?.statusCode;
+    const { connection, lastDisconnect } = update;
+    const statusCode = lastDisconnect?.error?.output?.statusCode;
 
-    
+    // ===== CONNECTING =====
+    if (connection === 'connecting') {
+      logger.connection('🔄 Connecting to WhatsApp servers...');
+      writeSessionStatus({ connection: 'connecting' });
+      return;
+    }
 
+    // ===== CONNECTED SUCCESSFULLY =====
+    if (connection === 'open') {
+      logger.success('✅ WhatsApp connected successfully!');
+      logger.info(`📱 Logged in as: ${sock.user?.name || 'Unknown'}`);
+      logger.info(`🆔 Bot number: ${sock.user?.id.split(':')[0]}`);
 
-  // ===== CONNECTING =====
-  if (connection === 'connecting') {
-    logger.connection('🔄 Connecting to WhatsApp servers...');
-    writeSessionStatus({ connection: 'connecting' });
-    return;
-  }
+      writeSessionStatus({
+        connection: 'open',
+        connectedNumber: sock.user?.id.split(':')[0],
+        connectedAt: new Date().toISOString()
+      });
 
-  // ===== CONNECTED SUCCESSFULLY =====
-  if (connection === 'open') {
-    logger.success('✅ WhatsApp connected successfully!');
-    logger.info(`📱 Logged in as: ${sock.user?.name || 'Unknown'}`);
-    logger.info(`🆔 Bot number: ${sock.user?.id.split(':')[0]}`);
+      logger.step(5, 6, 'Connection established');
+      logger.banner({
+        botName: ENV.BOT_NAME,
+        prefix: getActivePrefix(),
+        mode: ENV.MODE
+      });
 
-    writeSessionStatus({
-      connection: 'open',
-      connectedNumber: sock.user?.id.split(':')[0],
-      connectedAt: new Date().toISOString()
-    });
-
-    logger.step(5, 6, 'Connection established');
-    logger.banner({
-      botName: ENV.BOT_NAME,
-      prefix: getActivePrefix(),
-      mode: ENV.MODE
-    });
-
-    await notifyOwnerDeployment();
-    return;
-  }
-
+      await notifyOwnerDeployment();
+      return;
+    }
 
     // ===== LOGGED OUT =====
     if (statusCode === DisconnectReason.loggedOut) {
@@ -390,11 +394,12 @@ const statusCode = lastDisconnect?.error?.output?.statusCode;
     }
 
     // ===== RECONNECT =====
-    logger.warn('♻️ Reconnecting in 5 seconds...');
-    metrics.reconnects += 1;
-    setTimeout(() => startBot(), 5000);
-  
-});
+    if (connection === 'close') {
+      logger.warn('♻️ Reconnecting in 5 seconds...');
+      metrics.reconnects += 1;
+      setTimeout(() => startBot(), 5000);
+    }
+  });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
