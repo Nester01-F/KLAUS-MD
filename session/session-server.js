@@ -50,7 +50,6 @@ function debugLog(...args) {
 /* Socket helpers                                                      */
 /* ------------------------------------------------------------------ */
 
-// ✅ FIX: longer default timeout — Render/Railway cold starts are slow.
 function waitForSocketOpen(sock, timeoutMs = 30_000) {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -89,8 +88,6 @@ function waitForSocketOpen(sock, timeoutMs = 30_000) {
   });
 }
 
-// ✅ FIX: status merge now clears stale fields and never writes
-// lastPairingCode on failure.
 function writeStatus(update) {
   let current = {};
   if (fs.existsSync(statusPath)) {
@@ -126,7 +123,6 @@ function closeActiveSocket() {
   socketReady = false;
 }
 
-// ✅ FIX: helper to fully rebuild a socket from scratch.
 async function createSocket() {
   const { state, saveCreds } = await useMultiFileAuthState(sessionRoot);
   const { version } = await fetchLatestBaileysVersion();
@@ -137,7 +133,7 @@ async function createSocket() {
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     browser: ['KLAUS Session', 'Chrome', '1.0.0'],
-    keepAliveIntervalMs: 30_000 // ✅ FIX: was 10s → too aggressive
+    keepAliveIntervalMs: 30_000 
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -168,7 +164,6 @@ async function createSocket() {
 async function buildSocket(phoneNumber, { forceReset = false } = {}) {
   ensureFreshAuthState(forceReset);
 
-  // If creds already exist and are valid, skip pairing.
   if (!forceReset && fs.existsSync(credsPath)) {
     try {
       const existing = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
@@ -192,14 +187,11 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
     const startedAt = Date.now();
 
     try {
-      // ✅ FIX: always rebuild the socket per attempt. Reusing a half-dead
-      // socket is the #1 cause of null pairing codes.
       if (attempt > 1 || forceReset) {
         ensureFreshAuthState(true);
       }
       activeSocket = await createSocket();
 
-      // ✅ FIX: wait longer for open (10s) before falling back to request.
       await Promise.race([
         waitForSocketOpen(activeSocket, 30_000),
         delay(10_000)
@@ -229,7 +221,6 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
     }
   }
 
-  // ✅ FIX: write failure status WITHOUT lastPairingCode, and include error.
   if (!pairingCode) {
     writeStatus({
       generatedAt: new Date().toISOString(),
@@ -240,7 +231,6 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
     throw new Error(lastError?.message || 'Unable to generate pairing code. Try again.');
   }
 
-  // ✅ FIX: only write lastPairingCode on success.
   logger.session(`Pairing session ready for ${phoneNumber} (${pairingLabel})`);
   writeStatus({
     generatedAt: new Date().toISOString(),
@@ -262,7 +252,6 @@ async function exportSessionBase64() {
   try {
     const raw = fs.readFileSync(credsPath, 'utf-8').trim();
     if (!raw) {
-      // ✅ FIX: detect empty/corrupt creds — this is why you saw length 0.
       writeStatus({
         lastSessionLength: 0,
         lastExportError: 'creds.json is empty (pairing never completed)'
@@ -342,7 +331,7 @@ app.get('/export', async (_, res) => {
 });
 
 /* ------------------------------------------------------------------ */
-/* HTML UI                                                             */
+/* HTML UI (Cyberpunk / Glowing / Emoji-Free)                          */
 /* ------------------------------------------------------------------ */
 
 function buildHtml() {
@@ -352,481 +341,332 @@ function buildHtml() {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>${botName} • Session Pairing</title>
+<title>${botName} • Neural Link</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=Orbitron:wght@500;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet" />
 <style>
   :root {
-    --bg-0: #050a14;
-    --bg-1: #0a1424;
-    --bg-2: #0f1d33;
-    --card: rgba(15, 29, 51, 0.72);
-    --stroke: rgba(96, 165, 250, 0.18);
-    --stroke-strong: rgba(96, 165, 250, 0.45);
-    --text: #e6f0ff;
-    --muted: #8aa4c4;
-    --accent: #00c2ff;
-    --accent-2: #39d353;
-    --accent-3: #f97316;
-    --danger: #ff5d6c;
-    --mono: 'Fira Code', 'Courier New', monospace;
-    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --bg-base: #050505;
+    --bg-panel: rgba(15, 15, 20, 0.75);
+    --border-glow: rgba(0, 194, 255, 0.25);
+    --text-main: #ffffff;
+    --text-muted: #8b8b99;
+    --accent-cyan: #00c2ff;
+    --accent-green: #10b981;
+    --font-heading: 'Orbitron', sans-serif;
+    --font-mono: 'Fira Code', monospace;
+    --font-body: 'Inter', sans-serif;
   }
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; }
+  html, body { height: 100%; overflow-x: hidden; }
+
   body {
-    font-family: var(--sans);
-    color: var(--text);
-    background:
-      radial-gradient(1200px 600px at 10% -10%, rgba(0, 194, 255, 0.18), transparent 60%),
-      radial-gradient(900px 500px at 100% 0%, rgba(57, 211, 83, 0.12), transparent 55%),
-      radial-gradient(900px 500px at 50% 120%, rgba(249, 115, 22, 0.10), transparent 60%),
-      linear-gradient(180deg, var(--bg-0), var(--bg-1) 40%, var(--bg-2));
+    font-family: var(--font-body);
+    color: var(--text-main);
+    background-color: var(--bg-base);
+    background-image: 
+      radial-gradient(circle at 50% 0%, rgba(0, 194, 255, 0.15), transparent 50%),
+      radial-gradient(circle at 100% 100%, rgba(16, 185, 129, 0.05), transparent 50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
     min-height: 100vh;
-    padding: 32px 16px 64px;
-    -webkit-font-smoothing: antialiased;
-    position: relative;
-    overflow-x: hidden;
+    padding: 20px;
   }
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(96, 165, 250, 0.06) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(96, 165, 250, 0.06) 1px, transparent 1px);
-    background-size: 44px 44px;
-    mask-image: radial-gradient(circle at 50% 30%, #000 20%, transparent 75%);
-    -webkit-mask-image: radial-gradient(circle at 50% 30%, #000 20%, transparent 75%);
-    pointer-events: none;
-    z-index: 0;
-  }
-  .wrap { position: relative; z-index: 1; max-width: 720px; margin: 0 auto; }
-  .hero {
+
+  .cyber-container {
+    width: 100%;
+    max-width: 420px; 
     position: relative;
-    border-radius: 24px;
-    padding: 36px 28px 30px;
+    z-index: 10;
+    animation: fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .header {
     text-align: center;
-    background:
-      linear-gradient(180deg, rgba(10, 20, 36, 0.4), rgba(10, 20, 36, 0.9)),
-      radial-gradient(600px 200px at 50% 0%, rgba(0, 194, 255, 0.28), transparent 70%);
-    border: 1px solid var(--stroke);
-    box-shadow:
-      0 1px 0 rgba(255, 255, 255, 0.04) inset,
-      0 30px 80px -20px rgba(0, 0, 0, 0.7),
-      0 0 120px -30px rgba(0, 194, 255, 0.35);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    overflow: hidden;
-    margin-bottom: 22px;
+    margin-bottom: 24px;
+    position: relative;
   }
-  .hero::after {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, var(--accent), transparent);
-    opacity: 0.7;
-  }
-  .avatar-ring {
-    display: inline-block;
+
+  .logo-ring {
+    width: 90px;
+    height: 90px;
+    margin: 0 auto 15px;
+    border-radius: 50%;
     padding: 3px;
-    border-radius: 999px;
-    background: conic-gradient(from 180deg, var(--accent), var(--accent-2), var(--accent-3), var(--accent));
-    animation: spin 8s linear infinite;
-    margin-bottom: 14px;
+    background: linear-gradient(135deg, var(--accent-cyan), var(--accent-green));
+    box-shadow: 0 0 40px rgba(0, 194, 255, 0.3), inset 0 0 20px rgba(0, 194, 255, 0.5);
+    animation: pulse-glow 3s infinite alternate;
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .avatar {
-    width: 96px; height: 96px;
-    border-radius: 999px;
-    object-fit: cover;
-    display: block;
-    border: 3px solid var(--bg-1);
-    background: var(--bg-2);
+
+  @keyframes pulse-glow {
+    0% { box-shadow: 0 0 20px rgba(0, 194, 255, 0.2); }
+    100% { box-shadow: 0 0 60px rgba(0, 194, 255, 0.6), inset 0 0 20px rgba(16, 185, 129, 0.4); }
   }
-  .brand {
-    font-family: var(--mono);
-    font-weight: 700;
-    font-size: 30px;
-    letter-spacing: 0.5px;
-    margin-bottom: 6px;
-    background: linear-gradient(90deg, #00c2ff, #39d353 60%, #f97316);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .tagline { color: var(--muted); font-size: 14px; margin-bottom: 18px; }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 18px; }
-  .chip {
-    font-family: var(--mono);
-    font-size: 12px;
-    padding: 6px 12px;
-    border-radius: 999px;
-    background: rgba(0, 194, 255, 0.08);
-    border: 1px solid rgba(0, 194, 255, 0.25);
-    color: #9fe8ff;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .chip .dot {
-    width: 6px; height: 6px;
-    border-radius: 999px;
-    background: var(--accent-2);
-    box-shadow: 0 0 10px var(--accent-2);
-    animation: pulse 1.6s ease-in-out infinite;
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.5; transform: scale(0.8); }
-  }
-  .clock {
-    display: inline-block;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--muted);
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--stroke);
-    padding: 6px 12px;
-    border-radius: 999px;
-    margin-bottom: 20px;
-  }
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
+
+  .logo-inner {
     width: 100%;
-    padding: 14px 18px;
-    border-radius: 12px;
-    border: none;
-    font-family: var(--sans);
-    font-size: 15px;
+    height: 100%;
+    border-radius: 50%;
+    background-color: var(--bg-base);
+    background-image: url('/assets/menu.jpg');
+    background-size: cover;
+    background-position: center;
+    border: 2px solid #000;
+  }
+
+  .title {
+    font-family: var(--font-heading);
+    font-size: 24px;
+    font-weight: 900;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #fff;
+    text-shadow: 0 0 20px rgba(0, 194, 255, 0.6);
+    margin-bottom: 6px;
+  }
+
+  .subtitle {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--accent-cyan);
+    letter-spacing: 5px;
+    text-transform: uppercase;
+  }
+
+  .glass-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-glow);
+    border-radius: 16px;
+    padding: 28px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 
+      0 0 50px rgba(0, 194, 255, 0.1),
+      0 20px 40px rgba(0,0,0,0.8),
+      inset 0 1px 0 rgba(255,255,255,0.05);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .glass-panel::before {
+    content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+    opacity: 0.5;
+  }
+
+  .input-group { margin-bottom: 20px; position: relative; }
+  
+  .input-label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+  }
+
+  .cyber-input {
+    width: 100%;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 15px 16px;
+    color: var(--text-main);
+    font-family: var(--font-mono);
+    font-size: 16px;
+    letter-spacing: 1px;
+    outline: none;
+    transition: all 0.3s ease;
+  }
+
+  .cyber-input:focus {
+    border-color: var(--accent-cyan);
+    box-shadow: 0 0 20px rgba(0, 194, 255, 0.25), inset 0 0 10px rgba(0, 194, 255, 0.1);
+    background: rgba(0, 194, 255, 0.02);
+  }
+
+  .cyber-input::placeholder { color: rgba(255,255,255,0.2); }
+
+  .cyber-btn {
+    width: 100%;
+    padding: 15px;
+    background: transparent;
+    border: 1px solid var(--accent-cyan);
+    border-radius: 10px;
+    color: var(--accent-cyan);
+    font-family: var(--font-heading);
+    font-size: 13px;
     font-weight: 700;
-    letter-spacing: 0.2px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
     cursor: pointer;
-    transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
-    color: #041220;
-    background: linear-gradient(135deg, #00c2ff, #39d353);
-    box-shadow: 0 8px 24px -8px rgba(0, 194, 255, 0.6);
+    transition: all 0.3s ease;
+    box-shadow: 0 0 20px rgba(0, 194, 255, 0.15), inset 0 0 10px rgba(0, 194, 255, 0.1);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .cyber-btn:hover {
+    background: rgba(0, 194, 255, 0.1);
+    box-shadow: 0 0 30px rgba(0, 194, 255, 0.4), inset 0 0 20px rgba(0, 194, 255, 0.2);
+    text-shadow: 0 0 10px rgba(0, 194, 255, 0.8);
+  }
+
+  .cyber-btn:disabled { opacity: 0.5; cursor: not-allowed; border-color: var(--text-muted); color: var(--text-muted); box-shadow: none; }
+
+  .code-display {
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 10px;
+    padding: 24px 16px;
+    text-align: center;
+    margin-bottom: 20px;
+    box-shadow: inset 0 0 30px rgba(16, 185, 129, 0.05), 0 0 20px rgba(16, 185, 129, 0.1);
     position: relative;
   }
-  .btn:hover { transform: translateY(-2px); filter: brightness(1.05); }
-  .btn:active { transform: translateY(0); }
-  .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
-  .btn.ghost {
-    background: transparent;
-    color: var(--text);
-    border: 1px solid var(--stroke-strong);
-    box-shadow: none;
-  }
-  .btn.ghost:hover { background: rgba(0, 194, 255, 0.06); border-color: var(--accent); }
-  .btn.warn {
-    background: linear-gradient(135deg, #f97316, #ff5d6c);
-    color: #1a0800;
-  }
-  .btn .spinner {
-    width: 16px; height: 16px;
-    border-radius: 999px;
-    border: 2px solid rgba(4, 18, 32, 0.3);
-    border-top-color: #041220;
-    animation: spin 0.8s linear infinite;
-  }
-  .panel {
-    background: var(--card);
-    border: 1px solid var(--stroke);
-    border-radius: 20px;
-    padding: 26px 24px;
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    box-shadow: 0 20px 60px -30px rgba(0, 0, 0, 0.8);
-    animation: rise 0.4s ease;
-  }
-  @keyframes rise {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  .step-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-  .step-num {
-    width: 30px; height: 30px;
-    border-radius: 999px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-family: var(--mono);
-    font-weight: 700;
-    font-size: 13px;
-    color: var(--bg-0);
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    box-shadow: 0 0 20px rgba(0, 194, 255, 0.5);
-  }
-  .step-title { font-size: 16px; font-weight: 700; letter-spacing: 0.2px; }
-  .hint {
-    font-size: 13px;
-    color: var(--muted);
-    margin-bottom: 14px;
-    padding: 10px 14px;
-    border-left: 3px solid var(--accent);
-    background: rgba(0, 194, 255, 0.05);
-    border-radius: 6px;
-    line-height: 1.5;
-  }
-  .hint strong { color: var(--text); }
-  .field { position: relative; margin-bottom: 14px; }
-  .field input {
-    width: 100%;
-    padding: 16px 18px;
-    font-family: var(--mono);
-    font-size: 16px;
-    color: var(--text);
-    background: rgba(5, 10, 20, 0.6);
-    border: 1.5px solid var(--stroke-strong);
-    border-radius: 12px;
-    transition: border-color 0.2s, box-shadow 0.2s;
-  }
-  .field input:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 4px rgba(0, 194, 255, 0.12);
-  }
-  .field input::placeholder { color: rgba(138, 164, 196, 0.5); }
-  .code-card {
-    margin-top: 8px;
-    padding: 22px;
-    border-radius: 16px;
-    background:
-      radial-gradient(400px 120px at 50% 0%, rgba(57, 211, 83, 0.14), transparent 70%),
-      rgba(5, 10, 20, 0.7);
-    border: 1px solid rgba(57, 211, 83, 0.4);
-    text-align: center;
-    box-shadow: 0 0 60px -20px rgba(57, 211, 83, 0.4);
-  }
-  .code-label {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-    color: var(--muted);
-    margin-bottom: 12px;
-  }
+
+  .code-label { font-family: var(--font-mono); font-size: 10px; color: var(--accent-green); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 2px; }
+  
   .code-value {
-    font-family: var(--mono);
-    font-size: clamp(24px, 6vw, 34px);
-    font-weight: 700;
-    letter-spacing: 6px;
-    color: var(--accent-2);
-    text-shadow: 0 0 24px rgba(57, 211, 83, 0.5);
-    word-break: break-all;
-    margin-bottom: 16px;
+    font-family: var(--font-mono);
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: 8px;
+    color: #fff;
+    text-shadow: 0 0 20px rgba(16, 185, 129, 0.8);
     user-select: all;
     cursor: pointer;
-    padding: 6px;
-    border-radius: 8px;
-    transition: background 0.2s;
   }
-  .code-value:hover { background: rgba(57, 211, 83, 0.06); }
-  .steps-list {
-    text-align: left;
-    font-size: 13px;
-    color: var(--muted);
-    line-height: 1.7;
-    padding: 14px 16px;
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid var(--stroke);
-    margin-top: 12px;
-  }
-  .steps-list strong { color: var(--text); }
-  .steps-list code {
-    font-family: var(--mono);
-    background: rgba(0, 194, 255, 0.1);
-    padding: 1px 6px;
-    border-radius: 4px;
-    color: #9fe8ff;
+
+  .instructions {
     font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.8;
+    margin-bottom: 24px;
+    padding-left: 15px;
+    border-left: 2px solid rgba(16, 185, 129, 0.3);
   }
-  .session-box {
-    margin-top: 16px;
-    border-radius: 12px;
-    border: 1px solid rgba(249, 115, 22, 0.35);
-    background: rgba(249, 115, 22, 0.05);
-    padding: 14px;
-    animation: rise 0.3s ease;
-  }
-  .session-box textarea {
-    width: 100%;
-    min-height: 110px;
-    padding: 12px;
-    background: rgba(5, 10, 20, 0.8);
-    color: #ffd8b5;
-    border: 1px solid rgba(249, 115, 22, 0.3);
-    border-radius: 8px;
-    font-family: var(--mono);
-    font-size: 11px;
-    resize: vertical;
-    line-height: 1.5;
-    margin-bottom: 10px;
-  }
-  .session-box textarea:focus { outline: none; border-color: var(--accent-3); }
+
+  .instructions strong { color: var(--text-main); font-weight: 600; }
+
   .alert {
-    margin-top: 14px;
-    padding: 12px 14px;
-    border-radius: 10px;
-    font-size: 13px;
-    line-height: 1.5;
-    display: flex;
-    gap: 10px;
-    align-items: flex-start;
-    animation: rise 0.3s ease;
-  }
-  .alert.error {
-    background: rgba(255, 93, 108, 0.08);
-    border: 1px solid rgba(255, 93, 108, 0.3);
-    color: #ffb3bb;
-  }
-  .alert.success {
-    background: rgba(57, 211, 83, 0.08);
-    border: 1px solid rgba(57, 211, 83, 0.3);
-    color: #b6f7c1;
-  }
-  .alert .ico { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
-  .status-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
-  .status-pill {
-    font-family: var(--mono);
-    font-size: 11px;
-    padding: 5px 10px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--stroke);
-    color: var(--muted);
-  }
-  .status-pill.ok {
-    color: var(--accent-2);
-    border-color: rgba(57, 211, 83, 0.4);
-    background: rgba(57, 211, 83, 0.06);
-  }
-  .hidden { display: none !important; }
-  .mt { margin-top: 18px; }
-  .footer {
-    text-align: center;
+    padding: 12px 16px;
+    border-radius: 8px;
     font-size: 12px;
-    color: rgba(138, 164, 196, 0.6);
-    margin-top: 24px;
-    font-family: var(--mono);
+    margin-top: 15px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    animation: slideIn 0.3s ease;
   }
-  .footer a { color: var(--accent); text-decoration: none; }
-  .footer a:hover { text-decoration: underline; }
-  @media (max-width: 480px) {
-    .hero { padding: 28px 20px 24px; }
-    .brand { font-size: 24px; }
-    .panel { padding: 20px 16px; }
-    .code-value { letter-spacing: 4px; }
+  .alert.error { background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; box-shadow: 0 0 15px rgba(239, 68, 68, 0.1); }
+  
+  @keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
+  .hidden { display: none !important; }
+
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid rgba(0, 194, 255, 0.2); border-top-color: var(--accent-cyan); border-radius: 50%; animation: spin 1s linear infinite;
   }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="hero">
-    <div class="avatar-ring">
-      <img src="/assets/menu.jpg" alt="avatar" class="avatar" onerror="this.style.display='none';this.parentElement.style.display='none'" />
+
+<div class="cyber-container">
+  
+  <div class="header">
+    <div class="logo-ring">
+      <div class="logo-inner"></div>
     </div>
-    <div class="brand">${botName}</div>
-    <div class="tagline">Session Pairing Center</div>
-    <div class="chips">
-      <span class="chip"><span class="dot"></span>Online</span>
-      <span class="chip">Label: ${pairingLabel}</span>
-      <span class="chip">Baileys</span>
-    </div>
-    <div id="clock" class="clock">--:--:--</div>
-    <button class="btn" onclick="goToPairing()">🔗 Get Session</button>
+    <h1 class="title">${botName}</h1>
+    <p class="subtitle">Neural Link Protocol</p>
   </div>
 
-  <div id="step1" class="panel">
-    <div class="step-head">
-      <span class="step-num">1</span>
-      <span class="step-title">Enter Your WhatsApp Number</span>
+  <!-- STEP 1: INPUT -->
+  <div id="step1" class="glass-panel">
+    <div class="input-group">
+      <label class="input-label">WhatsApp Number (With Country Code)</label>
+      <input type="tel" id="phoneInput" class="cyber-input" placeholder="254712345678" autocomplete="off" />
     </div>
-    <div class="hint">
-      Include your country code <strong>without</strong> the <code>+</code> sign.<br/>
-      Example: <code>254725391914</code>
-    </div>
-    <div class="field">
-      <input type="tel" id="phoneInput" placeholder="254725391914" inputmode="numeric" autocomplete="off" />
-    </div>
-    <button class="btn" id="genBtn" onclick="generateCode()">⚡ Generate Pairing Code</button>
-    <div id="error" class="alert error hidden">
-      <span class="ico">⚠️</span>
+
+    <button class="cyber-btn" id="genBtn" onclick="generateCode()">
+      <span>Initialize Connection</span>
+    </button>
+    
+    <div id="errorBox" class="alert error hidden">
       <span id="errorText"></span>
     </div>
   </div>
 
-  <div id="step2" class="panel hidden">
-    <div class="step-head">
-      <span class="step-num">2</span>
-      <span class="step-title">Link Your Device</span>
-    </div>
-    <div class="code-card">
-      <div class="code-label">Your Pairing Code</div>
-      <div class="code-value" id="codeDisplay" onclick="copyPairingCode()" title="Click to copy"></div>
-      <button class="btn ghost" onclick="copyPairingCode()">📋 Copy Code</button>
-      <div class="steps-list">
-        <strong>On your phone:</strong><br/>
-        1. Open <strong>WhatsApp</strong><br/>
-        2. Go to <strong>Settings → Linked Devices</strong><br/>
-        3. Tap <strong>Link a Device → Link with phone number</strong><br/>
-        4. Enter the code above
-      </div>
+  <!-- STEP 2: PAIRING CODE -->
+  <div id="step2" class="glass-panel hidden">
+    <div class="code-display">
+      <div class="code-label">Pairing Code Generated</div>
+      <div class="code-value" id="codeDisplay" onclick="copyCode()" title="Click to copy"></div>
     </div>
 
-    <div class="mt">
-      <div class="step-head">
-        <span class="step-num">3</span>
-        <span class="step-title">Export Session String</span>
-      </div>
-      <div class="hint">
-        After linking succeeds on your phone, tap the button below to export your session credentials.
-      </div>
-      <button class="btn warn" id="exportBtn" onclick="exportSession()">📤 Export Session String</button>
-      <div id="sessionResult" class="session-box hidden">
-        <div class="code-label" style="text-align:left;">Session String</div>
-        <textarea id="sessionValue" readonly></textarea>
-        <button class="btn ghost" onclick="copySession()">📋 Copy Session</button>
-      </div>
+    <div class="instructions">
+      <strong>01.</strong> Open WhatsApp on your phone<br/>
+      <strong>02.</strong> Go to Linked Devices<br/>
+      <strong>03.</strong> Tap "Link with Phone Number"<br/>
+      <strong>04.</strong> Enter the code above
     </div>
 
-    <div class="status-row">
-      <button class="btn ghost" onclick="startOver()">🔄 Start Over</button>
-      <button class="btn ghost" onclick="refreshStatus()">📡 Check Status</button>
-    </div>
-    <div id="statusPills" class="status-row">
-      <span class="status-pill" id="pillLink">⏳ Waiting for link...</span>
+    <button class="cyber-btn" onclick="copyCode()" style="border-color: var(--accent-green); color: var(--accent-green); box-shadow: 0 0 20px rgba(16, 185, 129, 0.15); margin-bottom: 15px;">
+      <span>Copy Code</span>
+    </button>
+
+    <button class="cyber-btn" onclick="exportSession()" style="border-color: var(--accent-orange, #f97316); color: var(--accent-orange, #f97316); box-shadow: 0 0 20px rgba(249, 115, 22, 0.15); margin-bottom: 15px;">
+      <span>Export Session String</span>
+    </button>
+
+    <div id="sessionResult" class="hidden" style="margin-top: 15px;">
+      <label class="input-label">Session String</label>
+      <textarea id="sessionValue" readonly style="width: 100%; min-height: 80px; background: rgba(0,0,0,0.6); border: 1px solid rgba(249, 115, 22, 0.3); border-radius: 10px; padding: 10px; color: #fff; font-family: var(--font-mono); font-size: 11px; margin-bottom: 10px; resize: vertical;"></textarea>
+      <button class="cyber-btn" onclick="copySession()" style="border-color: var(--accent-orange, #f97316); color: var(--accent-orange, #f97316); box-shadow: 0 0 20px rgba(249, 115, 22, 0.15);">
+        <span>Copy Session String</span>
+      </button>
     </div>
   </div>
 
-  <div class="footer">
-    Built with 💙 by <a href="https://wa.me/254725391914">Warrior Felix</a>
-  </div>
 </div>
 
 <script>
   const $ = (id) => document.getElementById(id);
+
   function showError(msg) {
     $('errorText').textContent = msg;
-    $('error').classList.remove('hidden');
-    setTimeout(() => $('error').classList.add('hidden'), 6000);
+    $('errorBox').classList.remove('hidden');
+    setTimeout(() => $('errorBox').classList.add('hidden'), 6000);
   }
-  function hideError() { $('error').classList.add('hidden'); }
+
   function setLoading(btn, on, label) {
     if (on) {
       btn.dataset.original = btn.innerHTML;
-      btn.innerHTML = '<span class="spinner"></span> ' + (label || 'Working...');
+      btn.innerHTML = '<div class="spinner"></div><span>' + (label || 'Working...') + '</span>';
       btn.disabled = true;
     } else {
-      btn.innerHTML = btn.dataset.original || label || btn.innerHTML;
+      btn.innerHTML = btn.dataset.original;
       btn.disabled = false;
     }
   }
+
   async function copyText(text) {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
@@ -842,42 +682,34 @@ function buildHtml() {
     document.execCommand('copy');
     document.body.removeChild(el);
   }
-  function updateClock() {
-    const now = new Date();
-    $('clock').textContent = now.toLocaleString('en-KE', {
-      weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
-      hour: '2-digit', minute: '2-digit', second: '2-digit'
-    });
-  }
-  updateClock();
-  setInterval(updateClock, 1000);
-  function goToPairing() {
-    $('step1').scrollIntoView({ behavior: 'smooth', block: 'center' });
-    setTimeout(() => $('phoneInput').focus(), 400);
-  }
+
   async function generateCode() {
-    hideError();
+    $('errorBox').classList.add('hidden');
     const phone = $('phoneInput').value.replace(/[^0-9]/g, '');
-    if (!phone || phone.length < 10 || phone.length > 15) {
-      showError('Please enter a valid phone number with country code (10–15 digits).');
+    
+    if (!phone || phone.length < 10) {
+      showError('Please enter a valid number with country code.');
       return;
     }
+
     const btn = $('genBtn');
-    setLoading(btn, true, 'Generating...');
+    setLoading(btn, true, 'Connecting...');
+
     try {
       const res = await fetch('/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'number=' + encodeURIComponent(phone)
       });
+      
       const data = await res.json();
+
       if (data.ok) {
         $('codeDisplay').textContent = data.pairingCode;
         $('step1').classList.add('hidden');
         $('step2').classList.remove('hidden');
-        startStatusPolling();
       } else {
-        showError(data.error || 'Failed to generate code.');
+        showError(data.error || 'Connection failed.');
       }
     } catch (e) {
       showError('Network error: ' + e.message);
@@ -885,22 +717,19 @@ function buildHtml() {
       setLoading(btn, false);
     }
   }
-  async function copyPairingCode() {
-    const code = $('codeDisplay').textContent.trim();
-    if (!code) return showError('No pairing code yet.');
+
+  async function copyCode() {
+    const code = $('codeDisplay').textContent;
+    if (!code) return showError('No code generated yet.');
     try {
       await copyText(code);
-      const btn = event.target.closest('button');
-      if (btn) {
-        const orig = btn.innerHTML;
-        btn.innerHTML = '✅ Copied!';
-        setTimeout(() => { btn.innerHTML = orig; }, 1500);
-      }
-    } catch (e) { showError('Copy failed: ' + e.message); }
+      alert('Pairing code copied!');
+    } catch (e) {
+      showError('Copy failed: ' + e.message);
+    }
   }
+
   async function exportSession() {
-    const btn = $('exportBtn');
-    setLoading(btn, true, 'Exporting...');
     try {
       const res = await fetch('/export');
       const data = await res.json();
@@ -912,89 +741,21 @@ function buildHtml() {
       }
     } catch (e) {
       showError('Network error: ' + e.message);
-    } finally {
-      setLoading(btn, false);
     }
   }
+
   async function copySession() {
     const session = $('sessionValue').value;
     if (!session) return showError('No session string to copy.');
     try {
       await copyText(session);
-      const btn = event.target.closest('button');
-      if (btn) {
-        const orig = btn.innerHTML;
-        btn.innerHTML = '✅ Copied!';
-        setTimeout(() => { btn.innerHTML = orig; }, 1500);
-      }
-    } catch (e) { showError('Copy failed: ' + e.message); }
-  }
-  let statusTimer = null;
-  function startStatusPolling() {
-    if (statusTimer) return;
-    statusTimer = setInterval(refreshStatus, 4000);
-    refreshStatus();
-  }
-  function stopStatusPolling() {
-    if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
-  }
-  async function refreshStatus() {
-    try {
-      const res = await fetch('/status');
-      const data = await res.json();
-      const pill = $('pillLink');
-      if (data.linked) {
-        pill.textContent = '✅ Linked';
-        pill.classList.add('ok');
-        stopStatusPolling();
-      } else {
-        pill.textContent = '⏳ Waiting for link...';
-        pill.classList.remove('ok');
-      }
-    } catch { /* ignore */ }
-  }
-  async function startOver() {
-    const phone = $('phoneInput').value.replace(/[^0-9]/g, '');
-    if (!phone) { resetUi(); return; }
-    const btn = event.target.closest('button');
-    setLoading(btn, true, 'Resetting...');
-    try {
-      const res = await fetch('/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'number=' + encodeURIComponent(phone) + '&reset=1'
-      });
-      const data = await res.json();
-      if (data.ok) {
-        $('codeDisplay').textContent = data.pairingCode;
-        $('sessionResult').classList.add('hidden');
-        $('sessionValue').value = '';
-        stopStatusPolling();
-        startStatusPolling();
-      } else {
-        showError(data.error || 'Reset failed.');
-      }
+      alert('Session string copied!');
     } catch (e) {
-      showError('Network error: ' + e.message);
-    } finally {
-      setLoading(btn, false);
+      showError('Copy failed: ' + e.message);
     }
   }
-  function resetUi() {
-    $('phoneInput').value = '';
-    hideError();
-    $('sessionResult').classList.add('hidden');
-    $('sessionValue').value = '';
-    $('step1').classList.remove('hidden');
-    $('step2').classList.add('hidden');
-    stopStatusPolling();
-    $('phoneInput').focus();
-  }
-  $('phoneInput').focus();
-  $('phoneInput').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') generateCode();
-  });
 </script>
+
 </body>
 </html>`;
 }
