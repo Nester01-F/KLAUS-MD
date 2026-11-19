@@ -15,17 +15,17 @@
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
-    "@whiskeysockets/baileys": "^6.7.8",
+    "@whiskeysockets/baileys": "github:joivo/Baileys#fix/link-code-companion-reg-crash",
     "axios": "^1.8.4",
     "chalk": "^4.1.2",
+    "express": "^4.21.2",
     "file-type": "^19.6.0",
+    "megajs": "^1.2.0",
     "moment-timezone": "^0.5.47",
     "node-cache": "^5.1.2",
-    "megajs": "^1.2.0",
+    "pino": "^9.6.0",
     "pino-pretty": "^11.2.2",
     "qrcode": "^1.5.4",
-    "winston": "^3.17.0",
-    "express": "^4.21.2",
-    "pino": "^9.6.0"
+    "winston": "^3.17.0"
   }
 }

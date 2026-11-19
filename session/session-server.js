@@ -132,6 +132,7 @@ async function createSocket() {
   const sock = makeWASocket({
     version,
     auth: state,
+    
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     browser: ['KLAUS Session', 'Chrome', '1.0.0'],
