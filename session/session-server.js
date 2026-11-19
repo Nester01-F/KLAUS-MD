@@ -74,7 +74,7 @@ async function createSocket() {
     auth: state,
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
-    browser: ['KLAUS Session', 'Chrome', '1.0.0'],
+    browser: ['Ubuntu', 'Chrome', '122.0.0.0'],
     keepAliveIntervalMs: 60_000,
     markOnlineOnConnect: false,
     syncFullHistory: false
