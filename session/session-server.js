@@ -5,7 +5,7 @@ const pino = require('pino');
 
 const {
   default: makeWASocket,
-  fetchLatestWaWebVersion, // FIXED: Gets the live accepted version
+  fetchLatestWaWebVersion,
   useMultiFileAuthState,
   delay,
   DisconnectReason
@@ -23,7 +23,6 @@ const sessionRoot = path.join(__dirname, 'auth_info_baileys');
 const credsPath = path.join(sessionRoot, 'creds.json');
 const statusPath = path.join(__dirname, '..', 'session_status.json');
 const debugLogPath = path.join(__dirname, '..', 'pairing_debug.log');
-const pairingLabel = String(process.env.PAIRING_LABEL || 'yupradev').trim() || 'yupradev';
 
 let pairingCode = null;
 let socketReady = false;
@@ -55,8 +54,10 @@ function ensureFreshAuthState(forceReset = false) {
   }
 }
 
+// FIX: mark the socket as intentionally closed so the auto-reconnect logic ignores it
 function closeActiveSocket() {
-  if (activeSocket?.ws) {
+  if (activeSocket) {
+    activeSocket.intentionalClose = true;
     try { activeSocket.ws.close(); } catch {}
   }
   activeSocket = null;
@@ -65,8 +66,6 @@ function closeActiveSocket() {
 
 async function createSocket() {
   const { state, saveCreds } = await useMultiFileAuthState(sessionRoot);
-  
-  // FIXED: Fetches the exact WhatsApp Web version right now, preventing rejection
   const { version } = await fetchLatestWaWebVersion({});
 
   const sock = makeWASocket({
@@ -81,19 +80,48 @@ async function createSocket() {
   });
 
   sock.ev.on('creds.update', saveCreds);
-  sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
-    debugLog(`[${new Date().toISOString()}] global update → ${connection}`);
+
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+    debugLog('global update →', String(connection));
+
     if (connection === 'open') {
       socketReady = true;
       logger.session('Session linked successfully.');
-      writeStatus({ linkedAt: new Date().toISOString(), lastError: null });
+      writeStatus({ linkedAt: new Date().toISOString(), lastError: null, loggedOut: false });
     }
+
     if (connection === 'close') {
       socketReady = false;
+
+      // We closed it ourselves (reset / timeout / replaced) - do not reconnect
+      if (sock.intentionalClose) return;
+
       const code = lastDisconnect?.error?.output?.statusCode;
+      debugLog('closed with status', String(code));
+
       if (code === DisconnectReason.loggedOut) {
         logger.warn('Session logged out — creds are no longer valid.');
         writeStatus({ loggedOut: true });
+        return;
+      }
+
+      // FIX: after the phone accepts the pairing code, WhatsApp closes the socket
+      // with 515 (restartRequired). We must open a NEW socket with the saved creds
+      // to finish linking. Also reconnect on other drops once the device is registered.
+      const shouldReconnect =
+        code === DisconnectReason.restartRequired || state.creds.registered;
+
+      if (!shouldReconnect) return;
+
+      await delay(1500);
+      if (sock.intentionalClose) return;
+
+      try {
+        debugLog('reconnecting with saved creds...');
+        activeSocket = await createSocket();
+      } catch (e) {
+        debugLog('reconnect failed:', e.message);
+        writeStatus({ lastError: `reconnect failed: ${e.message}` });
       }
     }
   });
@@ -124,45 +152,26 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
       reject(new Error('Pairing timed out. WhatsApp may have rate-limited your IP. Wait 30 mins and try again.'));
     }, 45000);
 
-    createSocket().then((sock) => {
+    // FIX: request the code directly after the socket is created instead of
+    // waiting for a 'connecting' event that may already have fired.
+    createSocket().then(async (sock) => {
       activeSocket = sock;
-      
-      const onUpdate = async (update) => {
-        const { connection, lastDisconnect } = update;
-        
-        if (connection === 'connecting') {
-          debugLog('Socket is connecting. Waiting 3 seconds for stabilization...');
-          await delay(3000);
-          
-          try {
-            const code = await activeSocket.requestPairingCode(phoneNumber);
-            if (!code) throw new Error('Empty pairing code returned.');
+      try {
+        await delay(3000);
+        const code = await sock.requestPairingCode(phoneNumber);
+        if (!code) throw new Error('Empty pairing code returned.');
 
-            pairingCode = code;
-            clearTimeout(globalTimeout);
-            activeSocket.ev.off('connection.update', onUpdate);
+        pairingCode = code;
+        clearTimeout(globalTimeout);
 
-            logger.session(`Pairing session ready for ${phoneNumber}`);
-            writeStatus({ generatedAt: new Date().toISOString(), lastPairingCode: pairingCode, lastError: null });
-            resolve(activeSocket);
-          } catch (err) {
-            clearTimeout(globalTimeout);
-            activeSocket.ev.off('connection.update', onUpdate);
-            closeActiveSocket();
-            reject(err);
-          }
-        }
-
-        if (connection === 'close') {
-          const code = lastDisconnect?.error?.output?.statusCode;
-          clearTimeout(globalTimeout);
-          activeSocket.ev.off('connection.update', onUpdate);
-          closeActiveSocket();
-          reject(new Error(`Socket closed before pairing: status ${code}`));
-        }
-      };
-
-      activeSocket.ev.on('connection.update', onUpdate);
+        logger.session(`Pairing session ready for ${phoneNumber}`);
+        writeStatus({ generatedAt: new Date().toISOString(), lastPairingCode: pairingCode, lastError: null });
+        resolve(sock);
+      } catch (err) {
+        clearTimeout(globalTimeout);
+        closeActiveSocket();
+        reject(err);
+      }
     }).catch((err) => {
       clearTimeout(globalTimeout);
       reject(err);
@@ -205,6 +214,10 @@ app.post('/generate', async (req, res) => {
   const run = async () => {
     try {
       await buildSocket(number, { forceReset });
+      if (!pairingCode && socketReady) {
+        res.json({ ok: true, pairingCode: null, info: 'Existing session found — already linked.' });
+        return;
+      }
       res.json({ ok: true, pairingCode, info: 'Open WhatsApp → Linked devices → Link with phone number.' });
     } catch (err) {
       logger.error(`Session generation failed: ${err.message}`);
@@ -525,18 +538,21 @@ function buildHtml() {
     setLoading(btn, true, 'Connecting...');
 
     try {
+      // FIX: always send reset=1 so every attempt starts from clean auth state
       const res = await fetch('/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'number=' + encodeURIComponent(phone)
+        body: 'number=' + encodeURIComponent(phone) + '&reset=1'
       });
       
       const data = await res.json();
 
-      if (data.ok) {
+      if (data.ok && data.pairingCode) {
         $('codeDisplay').textContent = data.pairingCode;
         $('step1').classList.add('hidden');
         $('step2').classList.remove('hidden');
+      } else if (data.ok) {
+        showError(data.info || 'Already linked.');
       } else {
         showError(data.error || 'Connection failed.');
       }
