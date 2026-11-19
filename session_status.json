@@ -2,6 +2,28 @@
   "lastPairingCode": null,
   "lastError": "Socket closed before pairing: Connection Closed",
   "pairingAttempts": [
-    {"attempt":1,"ok":false,"ms":10002,"error":"Socket closed before pairing: Connection Closed"}
-  ]
+    {
+      "attempt": 1,
+      "ok": false,
+      "ms": 10002,
+      "error": "Socket closed before pairing: Connection Closed"
+    }
+  ],
+  "generatedAt": "2026-11-19T15:39:57.068Z",
+  "lastBootAt": "2026-11-19T15:39:57.068Z",
+  "sessionPresent": false,
+  "runtime": {
+    "updatedAt": "2026-11-19T15:39:57.069Z",
+    "uptimeSec": 1131,
+    "messages": 0,
+    "commands": 0,
+    "commandFailures": 0,
+    "statusReads": 0,
+    "autoReacts": 0,
+    "reconnects": 7,
+    "avgCommandMs": 0
+  },
+  "connection": "open",
+  "connectedNumber": "254701881604",
+  "connectedAt": "2026-11-19T15:39:59.196Z"
 }
