@@ -127,7 +127,8 @@ async function createSocket() {
   const { state, saveCreds } = await useMultiFileAuthState(sessionRoot);
   
   // FIXED: Using WaWebVersion for accurate pairing
-  const { version } = await fetchLatestWaWebVersion();
+   // Hardcoded to the latest valid version to prevent "connection closed"
+  const version = [2, 3000, 1033893291]; 
 
   const sock = makeWASocket({
     version,
