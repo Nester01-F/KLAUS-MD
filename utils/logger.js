@@ -1,38 +1,62 @@
 const chalk = require('chalk');
 
-function banner(phoneNumber, botName) {
+function banner(data) {
+  let name = 'KLAUS MD';
+  let phone = 'Unknown';
+
+  // Handle both object { botName: '...' } and string formats
+  if (typeof data === 'object' && data !== null) {
+    name = data.botName || name;
+  } else if (typeof data === 'string') {
+    phone = data;
+  }
+
   const time = new Date().toLocaleString();
   console.log(chalk.cyan(`
 ╔══════════════════════════════════════════╗
 ║                                          ║
-║   🤖  ${botName.padEnd(34)}║
+║   🤖  ${String(name).padEnd(34)}║
 ║                                          ║
-║   📱  Number : ${String(phoneNumber).padEnd(24)}║
+║   📱  Number : ${String(phone).padEnd(24)}║
 ║   🟢  Status : ONLINE                    ║
-║   ⏱️   Time   : ${time.padEnd(24)}║
+║   ⏱️   Time   : ${String(time).padEnd(24)}║
 ║                                          ║
 ╚══════════════════════════════════════════╝
   `));
 }
 
-function errorTrace(error, context = '') {
-  const contextStr = context ? `[${context}] ` : '';
-  console.error(chalk.red(`  ❌ ${contextStr}${error.message}`));
-  
-  if (error.stack) {
-    // Print the stack trace in gray so it's less aggressive but still readable
-    const stackLines = error.stack.split('\n').slice(1).join('\n');
-    console.error(chalk.gray(stackLines));
-  }
-}
-
 module.exports = {
   banner,
-  session: (msg) => console.log(chalk.cyan('  🔑 [SESSION] ' + msg)),
-  connected: (msg) => console.log(chalk.green('  ✅ ' + msg)),
-  success: (msg) => console.log(chalk.green('  ✅ ' + msg)), // Added in case your code calls .success()
+  step: (current, total, msg) => {
+    if (total === undefined) {
+      console.log(chalk.magenta('  ⚙️  ' + current));
+    } else {
+      console.log(chalk.magenta(`  ⚙️  [${current}/${total}] ${msg}`));
+    }
+  },
+  divider: () => console.log(chalk.gray('  ──────────────────────────────────────────')),
+  boot: (botName, subtitle) => console.log(chalk.cyan(`\n  🚀 Booting ${botName} | ${subtitle}\n`)),
+  kvBlock: (title, data) => {
+    console.log(chalk.cyan(`  ── ${title} ──`));
+    for (const [key, value] of Object.entries(data)) {
+      console.log(chalk.white(`    ${key}: `) + chalk.gray(value));
+    }
+  },
+  connection: (msg) => console.log(chalk.cyan('  🌐 [CONNECTION] ' + msg)),
+  stat: (msg) => console.log(chalk.gray('  📊 [STAT] ' + msg)),
+  command: (name, sender) => console.log(chalk.yellow(`  🎯 Command: ${name} | From: ${sender}`)),
+  commandStart: (name, sender, args) => console.log(chalk.gray(`     ↳ args: ${args && args.length ? args.join(' ') : 'none'}`)),
+  commandEnd: (name, ms) => console.log(chalk.green(`  ✔ Finished ${name} in ${ms}ms`)),
+  incoming: (chatId, sender, isGroup, length) => console.log(chalk.blue(`  📥 [${isGroup ? 'Group' : 'DM'}] Msg from ${sender.split('@')[0]} (${length} chars)`)),
+  info: (msg) => console.log(chalk.blue('  ℹ️  ' + msg)),
+  success: (msg) => console.log(chalk.green('  ✅ ' + msg)),
   warn: (msg) => console.log(chalk.yellow('  ⚠️  ' + msg)),
   error: (msg) => console.log(chalk.red('  ❌ ' + msg)),
-  info: (msg) => console.log(chalk.blue('  ℹ️  ' + msg)),
-  errorTrace // <--- This was missing and caused your crash
+  errorTrace: (error, context = '') => {
+    const contextStr = context ? `[${context}] ` : '';
+    console.error(chalk.red(`  ❌ ${contextStr}${error.message}`));
+    if (error.stack) {
+      console.error(chalk.gray(error.stack.split('\n').slice(1).join('\n')));
+    }
+  }
 };
