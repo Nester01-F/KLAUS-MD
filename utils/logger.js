@@ -4,7 +4,7 @@ function banner(data) {
   let name = 'KLAUS MD';
   let phone = 'Unknown';
 
-  // Handle both object { botName: '...' } and string formats
+  // Handle both object  { botName: '...' } and string formats
   if (typeof data === 'object' && data !== null) {
     name = data.botName || name;
   } else if (typeof data === 'string') {
