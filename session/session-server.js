@@ -136,7 +136,9 @@ async function createSocket() {
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     browser: ['KLAUS Session', 'Chrome', '1.0.0'],
-    keepAliveIntervalMs: 30_000 
+    keepAliveIntervalMs: 60_000,
+        markOnlineOnConnect: false,  // Prevents dropping during pairing
+    syncFullHistory: false
   });
 
   sock.ev.on('creds.update', saveCreds);
