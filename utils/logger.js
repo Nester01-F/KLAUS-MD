@@ -4,7 +4,6 @@ function banner(data) {
   let name = 'KLAUS MD';
   let phone = 'Unknown';
 
-  // Handle both object  { botName: '...' } and string formats
   if (typeof data === 'object' && data !== null) {
     name = data.botName || name;
   } else if (typeof data === 'string') {
@@ -27,6 +26,9 @@ function banner(data) {
 
 module.exports = {
   banner,
+  // Added 'session' back in here:
+  session: (msg) => console.log(chalk.cyan('  🔑 [SESSION] ' + msg)),
+  
   step: (current, total, msg) => {
     if (total === undefined) {
       console.log(chalk.magenta('  ⚙️  ' + current));
