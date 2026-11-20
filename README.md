@@ -61,11 +61,11 @@ Whether you're running commands, managing groups, or building your own automatio
 
 <div align="center">
 
-<a href="https://klaus-md-sxvp.onrender.com/">
+<a href="https://klaus-xmd.onrender.com/">
   <img src="https://img.shields.io/badge/🔐_Get-Session-2563EB?style=for-the-badge&logoColor=white" alt="Get Session" height="40" />
 </a>
 &nbsp;
-<a href="https://klaus-md-sxvp.onrender.com//export">
+<a href="https://klaus-xmd.onrender.com//export">
   <img src="https://img.shields.io/badge/📤_Export-Session_String-F97316?style=for-the-badge&logoColor=white" alt="Export Session" height="40" />
 </a>
 
