@@ -36,14 +36,13 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install
-    startCommand: node session.js
+    startCommand: node session/session-server.js
     autoDeploy: true
     envVars:
       - key: NODE_VERSION
         value: 20
-      - key: SESSION_SERVER_PORT
-        value: 3001
       - key: BOT_NAME
         value: KLAUS MD
-      - key: PAIRING_LABEL
-        value: yupradev
+      # Required: protects /generate and /export on a public URL
+      - key: SESSION_ADMIN_TOKEN
+        sync: false
