@@ -344,236 +344,369 @@ app.get('/export', requireAuth, async (_, res) => {
 /* ------------------------------------------------------------------ */
 
 function buildHtml() {
-  const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const botName = esc(settings.BOT_NAME || 'KLAUS-MD');
+  const botName = settings.BOT_NAME || 'KLAUS-MD';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="color-scheme" content="light dark" />
-<title>${botName} · Link WhatsApp</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>${botName} • Neural Link</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;700&family=JetBrains+Mono:wght@600;800&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=Orbitron:wght@500;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet" />
 <style>
-:root{--bg:#ECEFEA;--card:#fff;--ink:#17201B;--muted:#5B675F;--line:#D6DDD6;--accent:#0E6B4E;--on-accent:#fff;--slab:#17201B;--slab-ink:#EAF3EC;--bad:#A32A2A;--bad-bg:#FBECEC;--ok-bg:#E5F3EB;--r:14px}
-@media (prefers-color-scheme:dark){:root{--bg:#0F1512;--card:#18211C;--ink:#E8EFE9;--muted:#98A59C;--line:#2A362E;--accent:#4CC38A;--on-accent:#0B1A12;--slab:#070A08;--slab-ink:#E8F3EA;--bad:#FF9C9C;--bad-bg:#3A1D1D;--ok-bg:#16291F}}
-*{box-sizing:border-box;margin:0}
-html{-webkit-text-size-adjust:100%}
-body{font:16px/1.5 'Bricolage Grotesque',system-ui,sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;padding:28px 16px 48px}
-.wrap{max-width:480px;margin:0 auto}
-.hidden{display:none!important}
-.top{display:flex;align-items:center;gap:14px;margin-bottom:22px}
-.avatar{width:48px;height:48px;border-radius:50%;object-fit:cover;background:var(--line)}
-h1{font-size:22px;font-weight:700;line-height:1.2}
-.top p{color:var(--muted);font-size:15px}
-.steps{list-style:none;padding:0;display:flex;gap:8px;margin-bottom:18px}
-.steps li{flex:1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted);padding-top:10px;border-top:3px solid var(--line)}
-.steps li b{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;border:1.5px solid var(--line);flex:none}
-.steps li.on{color:var(--ink);border-color:var(--accent)}
-.steps li.on b{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
-.steps li.done{color:var(--ink);border-color:var(--accent)}
-.steps li.done b{border-color:var(--accent);color:var(--accent)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:22px}
-.card+.card{margin-top:14px}
-label,.lead{display:block;font-weight:600;margin-bottom:6px}
-.hint{color:var(--muted);font-size:14px;margin-top:6px}
-input,textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1.5px solid var(--line);border-radius:10px;padding:13px 14px}
-input{font-size:18px;letter-spacing:.02em}
-textarea{font:600 12px/1.5 'JetBrains Mono',monospace;min-height:96px;resize:vertical;word-break:break-all}
-:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-input:focus-visible{outline-offset:0}
-.btn{font:inherit;font-weight:600;border-radius:10px;padding:13px 16px;border:1.5px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer;width:100%;margin-top:14px;display:flex;justify-content:center;align-items:center;gap:8px}
-.btn.alt{background:transparent;color:var(--accent)}
-.btn:disabled{opacity:.55;cursor:wait}
-.row{display:flex;gap:10px}.row .btn{margin-top:14px}
-.spin{width:16px;height:16px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .7s linear infinite}
-@keyframes sp{to{transform:rotate(360deg)}}
-.msg{border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:15px}
-.msg.err{background:var(--bad-bg);color:var(--bad)}
-.msg.ok{background:var(--ok-bg);color:var(--ink)}
-.code{all:unset;display:flex;justify-content:center;align-items:center;gap:10px;width:100%;background:var(--slab);color:var(--slab-ink);border-radius:12px;padding:22px 8px;cursor:pointer;box-sizing:border-box}
-.code:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-.code .g{font:800 clamp(30px,10vw,42px)/1 'JetBrains Mono',monospace;letter-spacing:.08em;display:flex}
-.code .g span{display:inline-block;opacity:0;transform:translateY(6px);animation:land .32s forwards}
-@keyframes land{to{opacity:1;transform:none}}
-.code .d{opacity:.4;font:800 30px 'JetBrains Mono',monospace}
-.code.expired{opacity:.35}
-.bar{height:5px;background:var(--line);border-radius:3px;margin:14px 0 6px;overflow:hidden}
-.bar i{display:block;height:100%;width:100%;background:var(--accent);transition:width .25s linear}
-.how{padding-left:20px;margin-top:16px;color:var(--ink)}
-.how li{padding:2px 0 2px 4px}
-.note{color:var(--muted);font-size:14px;margin-top:12px}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.code .g span{opacity:1;transform:none}}
+  :root {
+    --bg-base: #030305;
+    --bg-panel: rgba(15, 15, 20, 0.75);
+    --border-glow: rgba(0, 194, 255, 0.25);
+    --text-main: #ffffff;
+    --text-muted: #8b8b99;
+    --accent-cyan: #00c2ff;
+    --accent-green: #10b981;
+    --accent-orange: #f97316;
+    --font-heading: 'Orbitron', sans-serif;
+    --font-mono: 'Fira Code', monospace;
+    --font-body: 'Inter', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow-x: hidden; }
+
+  body {
+    font-family: var(--font-body);
+    color: var(--text-main);
+    background-color: var(--bg-base);
+    background-image: 
+      radial-gradient(circle at 15% 50%, rgba(0, 194, 255, 0.08), transparent 40%),
+      radial-gradient(circle at 85% 30%, rgba(16, 185, 129, 0.06), transparent 40%);
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 20px;
+  }
+
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 30px 30px; z-index: 0; pointer-events: none;
+    mask-image: radial-gradient(circle at 50% 50%, black 20%, transparent 80%);
+    -webkit-mask-image: radial-gradient(circle at 50% 50%, black 20%, transparent 80%);
+  }
+
+  .cyber-container {
+    width: 100%; max-width: 420px; 
+    position: relative; z-index: 10;
+    animation: fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .header { text-align: center; margin-bottom: 24px; position: relative; }
+
+  .logo-ring {
+    width: 90px; height: 90px; margin: 0 auto 15px;
+    border-radius: 50%; padding: 3px;
+    background: linear-gradient(135deg, var(--accent-cyan), var(--accent-green));
+    box-shadow: 0 0 40px rgba(0, 194, 255, 0.3), inset 0 0 20px rgba(0, 194, 255, 0.5);
+    animation: pulse-glow 3s infinite alternate;
+  }
+
+  @keyframes pulse-glow {
+    0% { box-shadow: 0 0 20px rgba(0, 194, 255, 0.2); }
+    100% { box-shadow: 0 0 60px rgba(0, 194, 255, 0.6), inset 0 0 20px rgba(16, 185, 129, 0.4); }
+  }
+
+  .logo-inner {
+    width: 100%; height: 100%; border-radius: 50%;
+    background-color: var(--bg-base); background-image: url('/assets/menu.jpg');
+    background-size: cover; background-position: center; border: 2px solid #000;
+  }
+
+  .title {
+    font-family: var(--font-heading); font-size: 24px; font-weight: 900;
+    letter-spacing: 3px; text-transform: uppercase; color: #fff;
+    text-shadow: 0 0 20px rgba(0, 194, 255, 0.6); margin-bottom: 6px;
+  }
+
+  .subtitle {
+    font-family: var(--font-mono); font-size: 10px; color: var(--accent-cyan);
+    letter-spacing: 5px; text-transform: uppercase;
+  }
+
+  .glass-panel {
+    background: var(--bg-panel); border: 1px solid var(--border-glow);
+    border-radius: 16px; padding: 28px;
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 0 50px rgba(0, 194, 255, 0.1), 0 20px 40px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.05);
+    position: relative; overflow: hidden;
+  }
+
+  .glass-panel::before {
+    content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent); opacity: 0.5;
+  }
+
+  .input-group { margin-bottom: 20px; position: relative; }
+  
+  .input-label {
+    display: block; font-family: var(--font-mono); font-size: 10px;
+    color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1.5px;
+  }
+
+  .cyber-input {
+    width: 100%; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px; padding: 15px 16px; color: var(--text-main);
+    font-family: var(--font-mono); font-size: 16px; letter-spacing: 1px;
+    outline: none; transition: all 0.3s ease;
+  }
+
+  .cyber-input:focus {
+    border-color: var(--accent-cyan);
+    box-shadow: 0 0 20px rgba(0, 194, 255, 0.25), inset 0 0 10px rgba(0, 194, 255, 0.1);
+    background: rgba(0, 194, 255, 0.02);
+  }
+
+  .cyber-input::placeholder { color: rgba(255,255,255,0.2); }
+
+  .cyber-btn {
+    width: 100%; padding: 15px; background: transparent; border: 1px solid var(--accent-cyan);
+    border-radius: 10px; color: var(--accent-cyan); font-family: var(--font-heading);
+    font-size: 13px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    cursor: pointer; transition: all 0.3s ease;
+    box-shadow: 0 0 20px rgba(0, 194, 255, 0.15), inset 0 0 10px rgba(0, 194, 255, 0.1);
+    display: flex; justify-content: center; align-items: center; gap: 10px; position: relative; overflow: hidden;
+  }
+
+  .cyber-btn:hover {
+    background: rgba(0, 194, 255, 0.1);
+    box-shadow: 0 0 30px rgba(0, 194, 255, 0.4), inset 0 0 20px rgba(0, 194, 255, 0.2);
+    text-shadow: 0 0 10px rgba(0, 194, 255, 0.8);
+  }
+
+  .cyber-btn:disabled { opacity: 0.5; cursor: not-allowed; border-color: var(--text-muted); color: var(--text-muted); box-shadow: none; }
+
+  .code-display {
+    background: rgba(0,0,0,0.6); border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 10px; padding: 24px 16px; text-align: center; margin-bottom: 20px;
+    box-shadow: inset 0 0 30px rgba(16, 185, 129, 0.05), 0 0 20px rgba(16, 185, 129, 0.1);
+    position: relative; animation: slideDown 0.5s ease-out forwards;
+  }
+
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .code-label { font-family: var(--font-mono); font-size: 10px; color: var(--accent-green); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 2px; }
+  
+  .code-value {
+    font-family: var(--font-mono); font-size: 28px; font-weight: 600;
+    letter-spacing: 8px; color: #fff; text-shadow: 0 0 20px rgba(16, 185, 129, 0.8); user-select: all; cursor: pointer;
+  }
+
+  .instructions {
+    font-size: 12px; color: var(--text-muted); line-height: 1.8;
+    margin-bottom: 24px; padding-left: 15px; border-left: 2px solid rgba(16, 185, 129, 0.3);
+  }
+
+  .instructions strong { color: var(--text-main); font-weight: 600; }
+
+  .alert {
+    padding: 12px 16px; border-radius: 8px; font-size: 12px; margin-top: 15px;
+    display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); animation: slideIn 0.3s ease;
+  }
+  .alert.error { background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; box-shadow: 0 0 15px rgba(239, 68, 68, 0.1); }
+  
+  @keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
+  .hidden { display: none !important; }
+
+  .spinner { width: 14px; height: 14px; border: 2px solid rgba(0, 194, 255, 0.2); border-top-color: var(--accent-cyan); border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
-<main class="wrap">
-  <header class="top">
-    <img class="avatar" src="/assets/menu.jpg" alt="" onerror="this.style.visibility='hidden'" />
-    <div><h1>${botName}</h1><p>Link a WhatsApp account to this bot</p></div>
-  </header>
 
-  <ol class="steps" aria-label="Progress">
-    <li id="s1" class="on"><b>1</b>Your number</li>
-    <li id="s2"><b>2</b>Pair phone</li>
-    <li id="s3"><b>3</b>Save session</li>
-  </ol>
-
-  <div id="msg" class="msg hidden" role="status" aria-live="polite"></div>
-
-  <section id="tokenBox" class="card hidden">
-    <label for="tokenInput">Access token</label>
-    <input id="tokenInput" type="password" autocomplete="off" />
-    <p class="hint">This server is protected. Enter the value of SESSION_ADMIN_TOKEN.</p>
-    <button class="btn" id="tokenBtn" type="button">Save token</button>
-  </section>
-
-  <section id="p1" class="card">
-    <label for="phoneInput">WhatsApp number</label>
-    <input id="phoneInput" type="tel" inputmode="numeric" placeholder="254712345678" autocomplete="off" />
-    <p class="hint" id="phoneHint">Country code first, digits only. No + and no leading 0.</p>
-    <button class="btn" id="genBtn" type="button">Get pairing code</button>
-  </section>
-
-  <section id="p2" class="card hidden">
-    <p class="lead">Enter this code in WhatsApp</p>
-    <button class="code" id="codeDisplay" type="button" aria-label="Pairing code. Press to copy."></button>
-    <div class="bar" aria-hidden="true"><i id="timerBar"></i></div>
-    <p class="hint" id="timerText"></p>
-    <ol class="how">
-      <li>Open WhatsApp on the phone with this number</li>
-      <li>Go to Settings, then Linked devices</li>
-      <li>Tap Link a device, then Link with phone number instead</li>
-      <li>Type the code. This page moves on by itself once linked.</li>
-    </ol>
-    <div class="row">
-      <button class="btn alt" id="copyCodeBtn" type="button">Copy code</button>
-      <button class="btn alt" id="againBtn" type="button">New code</button>
+<div class="cyber-container">
+  
+  <div class="header">
+    <div class="logo-ring">
+      <div class="logo-inner"></div>
     </div>
-  </section>
+    <h1 class="title">${botName}</h1>
+    <p class="subtitle">Neural Link Protocol</p>
+  </div>
 
-  <section id="p3" class="card hidden">
-    <p class="lead">Account linked</p>
-    <p class="hint" style="margin-top:0">Get the session string and paste it into the SESSION variable where your bot runs.</p>
-    <button class="btn" id="exportBtn" type="button">Get session string</button>
-    <div id="sessionResult" class="hidden">
-      <label for="sessionValue" style="margin-top:16px">Session string</label>
-      <textarea id="sessionValue" readonly></textarea>
-      <button class="btn" id="copySessionBtn" type="button">Copy session string</button>
-      <p class="note">Anyone with this string can use your WhatsApp account. Keep it private and never commit it to GitHub.</p>
+  <div id="step1" class="glass-panel">
+    <div class="input-group">
+      <label class="input-label">WhatsApp Number (With Country Code)</label>
+      <input type="tel" id="phoneInput" class="cyber-input" placeholder="254712345678" autocomplete="off" />
     </div>
-    <button class="btn alt" id="restartBtn" type="button">Link another number</button>
-  </section>
-</main>
+
+    <button class="cyber-btn" id="genBtn" onclick="generateCode()">
+      <span>Initialize Connection</span>
+    </button>
+    
+    <div id="errorBox" class="alert error hidden">
+      <span id="errorText"></span>
+    </div>
+  </div>
+
+  <div id="step2" class="glass-panel hidden">
+    <div class="code-display">
+      <div class="code-label">Pairing Code Generated</div>
+      <div class="code-value" id="codeDisplay" onclick="copyCode()" title="Click to copy"></div>
+    </div>
+
+    <div class="instructions">
+      <strong>01.</strong> Open WhatsApp on your phone<br/>
+      <strong>02.</strong> Go to Linked Devices<br/>
+      <strong>03.</strong> Tap "Link with Phone Number"<br/>
+      <strong>04.</strong> Enter the code above
+    </div>
+
+    <button class="cyber-btn" onclick="copyCode()" style="border-color: var(--accent-green); color: var(--accent-green); box-shadow: 0 0 20px rgba(16, 185, 129, 0.15); margin-bottom: 15px;">
+      <span>Copy Code</span>
+    </button>
+
+    <button class="cyber-btn" onclick="exportSession()" style="border-color: var(--accent-orange); color: var(--accent-orange); box-shadow: 0 0 20px rgba(249, 115, 22, 0.15); margin-bottom: 15px;">
+      <span>Export Session String</span>
+    </button>
+
+    <div id="sessionResult" class="hidden" style="margin-top: 15px;">
+      <label class="input-label">Session String</label>
+      <textarea id="sessionValue" readonly style="width: 100%; min-height: 80px; background: rgba(0,0,0,0.6); border: 1px solid rgba(249, 115, 22, 0.3); border-radius: 10px; padding: 10px; color: #fff; font-family: var(--font-mono); font-size: 11px; margin-bottom: 10px; resize: vertical;"></textarea>
+      <button class="cyber-btn" onclick="copySession()" style="border-color: var(--accent-orange); color: var(--accent-orange); box-shadow: 0 0 20px rgba(249, 115, 22, 0.15);">
+        <span>Copy Session String</span>
+      </button>
+    </div>
+  </div>
+
+</div>
 
 <script>
-var $ = function (id) { return document.getElementById(id); };
-var TTL = 120, expiresAt = 0, tick = null, poll = null;
+  const $ = (id) => document.getElementById(id);
 
-function token() { return sessionStorage.getItem('adminToken') || ''; }
+  function showError(msg) {
+    $('errorText').textContent = msg;
+    $('errorBox').classList.remove('hidden');
+    setTimeout(() => $('errorBox').classList.add('hidden'), 6000);
+  }
 
-function api(path, opts) {
-  opts = opts || {};
-  opts.headers = Object.assign({ 'x-admin-token': token() }, opts.headers || {});
-  return fetch(path, opts).then(function (r) {
-    return r.json().then(function (d) {
-      if (r.status === 401) { $('tokenBox').classList.remove('hidden'); $('tokenInput').focus(); d.error = 'Enter the access token to continue.'; }
-      return d;
-    });
-  });
-}
+  function setLoading(btn, on, label) {
+    if (on) {
+      btn.dataset.original = btn.innerHTML;
+      btn.innerHTML = '<div class="spinner"></div><span>' + (label || 'Working...') + '</span>';
+      btn.disabled = true;
+    } else {
+      btn.innerHTML = btn.dataset.original;
+      btn.disabled = false;
+    }
+  }
 
-function say(text, kind) {
-  var m = $('msg');
-  if (!text) { m.classList.add('hidden'); return; }
-  m.textContent = text;
-  m.className = 'msg ' + (kind || 'err');
-}
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const el = document.createElement('textarea');
+    el.value = text;
+    el.style.position = 'fixed';
+    el.style.opacity = '0';
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+  }
 
-function busy(btn, on, label) {
-  if (on) { btn.dataset.html = btn.innerHTML; btn.innerHTML = '<span class="spin"></span><span>' + label + '</span>'; btn.disabled = true; }
-  else { btn.innerHTML = btn.dataset.html || btn.innerHTML; btn.disabled = false; }
-}
+  function getToken() {
+    let t = sessionStorage.getItem('adminToken');
+    if (t === null) {
+      t = prompt('Access token (leave empty if running locally):') || '';
+      sessionStorage.setItem('adminToken', t);
+    }
+    return t;
+  }
 
-function stage(n) {
-  ['p1', 'p2', 'p3'].forEach(function (id, i) { $(id).classList.toggle('hidden', i !== n - 1); });
-  [1, 2, 3].forEach(function (i) {
-    var li = $('s' + i);
-    li.className = i < n ? 'done' : i === n ? 'on' : '';
-    li.firstChild.textContent = i < n ? '\u2713' : String(i);
-  });
-  if (n !== 2) { clearInterval(tick); clearInterval(poll); }
-}
+  async function generateCode() {
+    $('errorBox').classList.add('hidden');
+    const phone = $('phoneInput').value.replace(/[^0-9]/g, '');
+    
+    if (!phone || phone.length < 10) {
+      showError('Please enter a valid number with country code.');
+      return;
+    }
 
-function copy(text, done) {
-  var ok = function () { say(done, 'ok'); };
-  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(ok, function () { say('Copy failed. Select the text and copy it manually.'); }); return; }
-  var t = document.createElement('textarea'); t.value = text; t.style.cssText = 'position:fixed;opacity:0';
-  document.body.appendChild(t); t.select();
-  try { document.execCommand('copy'); ok(); } catch (e) { say('Copy failed. Select the text and copy it manually.'); }
-  document.body.removeChild(t);
-}
+    const btn = $('genBtn');
+    setLoading(btn, true, 'Connecting...');
 
-function showCode(code) {
-  var a = code.slice(0, 4), b = code.slice(4), i = 0;
-  var group = function (s) { return '<span class="g">' + s.split('').map(function (c) { return '<span style="animation-delay:' + (i++ * 55) + 'ms">' + c + '</span>'; }).join('') + '</span>'; };
-  $('codeDisplay').innerHTML = group(a) + '<span class="d">-</span>' + group(b);
-  $('codeDisplay').dataset.code = a + '-' + b;
-  $('codeDisplay').classList.remove('expired');
-  expiresAt = Date.now() + TTL * 1000;
-  clearInterval(tick);
-  tick = setInterval(function () {
-    var left = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
-    $('timerBar').style.width = (left / TTL * 100) + '%';
-    if (left > 0) { $('timerText').textContent = 'Code expires in about ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0'); }
-    else { $('timerText').textContent = 'This code has probably expired. Press New code.'; $('codeDisplay').classList.add('expired'); clearInterval(tick); }
-  }, 250);
-  clearInterval(poll);
-  poll = setInterval(function () {
-    api('/status').then(function (d) { if (d && d.linked) { say('Linked. Your WhatsApp account is connected.', 'ok'); stage(3); } });
-  }, 4000);
-}
+    try {
+      // FIX: always send reset=1 so every attempt starts from clean auth state
+      const res = await fetch('/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'x-admin-token': getToken() },
+        body: 'number=' + encodeURIComponent(phone) + '&reset=1'
+      });
+      
+      if (res.status === 401) sessionStorage.removeItem('adminToken');
+      const data = await res.json();
 
-function generate() {
-  say('');
-  var phone = $('phoneInput').value.replace(/[^0-9]/g, '').replace(/^0+/, '');
-  if (phone.length < 10 || phone.length > 15) { say('Enter your full number with country code, for example 254712345678.'); $('phoneInput').focus(); return; }
-  var btn = $('genBtn'); busy(btn, true, 'Requesting code');
-  api('/generate', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'number=' + encodeURIComponent(phone) + '&reset=1' })
-    .then(function (d) {
-      if (d.ok && d.pairingCode) { stage(2); showCode(d.pairingCode); }
-      else if (d.ok) { say(d.info || 'This session is already linked.', 'ok'); stage(3); }
-      else { say(d.error || 'Could not get a code. Try again in a minute.'); }
-    })
-    .catch(function (e) { say('Could not reach the server: ' + e.message); })
-    .then(function () { busy(btn, false); });
-}
+      if (data.ok && data.pairingCode) {
+        $('codeDisplay').textContent = data.pairingCode;
+        $('step1').classList.add('hidden');
+        $('step2').classList.remove('hidden');
+      } else if (data.ok) {
+        showError(data.info || 'Already linked.');
+      } else {
+        showError(data.error || 'Connection failed.');
+      }
+    } catch (e) {
+      showError('Network error: ' + e.message);
+    } finally {
+      setLoading(btn, false);
+    }
+  }
 
-function exportSession() {
-  var btn = $('exportBtn'); busy(btn, true, 'Fetching');
-  api('/export').then(function (d) {
-    if (d.ok) { $('sessionValue').value = d.session; $('sessionResult').classList.remove('hidden'); btn.classList.add('hidden'); say('Session string ready.', 'ok'); }
-    else { say(d.error || 'No session yet. Finish linking on your phone first.'); }
-  }).catch(function (e) { say('Could not reach the server: ' + e.message); })
-    .then(function () { busy(btn, false); });
-}
+  async function copyCode() {
+    const code = $('codeDisplay').textContent;
+    if (!code) return showError('No code generated yet.');
+    try {
+      await copyText(code);
+      alert('Pairing code copied!');
+    } catch (e) {
+      showError('Copy failed: ' + e.message);
+    }
+  }
 
-$('genBtn').onclick = generate;
-$('phoneInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') generate(); });
-$('phoneInput').addEventListener('input', function () {
-  var d = this.value.replace(/[^0-9]/g, '');
-  $('phoneHint').textContent = d.charAt(0) === '0' ? 'Replace the leading 0 with your country code, for example 254.' : 'Country code first, digits only. No + and no leading 0.';
-});
-$('tokenBtn').onclick = function () { sessionStorage.setItem('adminToken', $('tokenInput').value); $('tokenBox').classList.add('hidden'); say('Token saved. Press the button again.', 'ok'); };
-$('tokenInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('tokenBtn').click(); });
-$('codeDisplay').onclick = $('copyCodeBtn').onclick = function () { copy($('codeDisplay').dataset.code.replace('-', ''), 'Code copied.'); };
-$('againBtn').onclick = function () { say(''); stage(1); $('phoneInput').focus(); };
-$('exportBtn').onclick = exportSession;
-$('copySessionBtn').onclick = function () { copy($('sessionValue').value, 'Session string copied.'); };
-$('restartBtn').onclick = function () { say(''); $('sessionResult').classList.add('hidden'); $('exportBtn').classList.remove('hidden'); $('sessionValue').value = ''; stage(1); };
+  async function exportSession() {
+    try {
+      const res = await fetch('/export', { headers: { 'x-admin-token': getToken() } });
+      const data = await res.json();
+      if (data.ok) {
+        $('sessionValue').value = data.session;
+        $('sessionResult').classList.remove('hidden');
+      } else {
+        showError(data.error || 'No session available yet. Link first.');
+      }
+    } catch (e) {
+      showError('Network error: ' + e.message);
+    }
+  }
+
+  async function copySession() {
+    const session = $('sessionValue').value;
+    if (!session) return showError('No session string to copy.');
+    try {
+      await copyText(session);
+      alert('Session string copied!');
+    } catch (e) {
+      showError('Copy failed: ' + e.message);
+    }
+  }
 </script>
+
 </body>
 </html>`;
 }
