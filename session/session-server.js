@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const pino = require('pino');
+const crypto = require('crypto');
 
 const {
   default: makeWASocket,
@@ -24,7 +25,67 @@ const credsPath = path.join(sessionRoot, 'creds.json');
 const statusPath = path.join(__dirname, '..', 'session_status.json');
 const debugLogPath = path.join(__dirname, '..', 'pairing_debug.log');
 
+
+/* ------------------------------------------------------------------ */
+/* Security: auth + rate limiting                                      */
+/* ------------------------------------------------------------------ */
+const ADMIN_TOKEN = String(process.env.SESSION_ADMIN_TOKEN || '');
+const PAIRING_COOLDOWN_MS = Number(process.env.PAIRING_COOLDOWN_MS || 30_000);
+const PAIRING_MAX_PER_HOUR = Number(process.env.PAIRING_MAX_PER_HOUR || 6);
+const PAIRING_CODE_TTL_SEC = 120; // WhatsApp codes are short-lived; shown to the user as a hint
+const pairingHits = new Map(); // ip -> [timestamps]
+
+function isLoopback(req) {
+  const ip = String(req.socket?.remoteAddress || '');
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
+function tokenMatches(given) {
+  const a = Buffer.from(String(given || ''));
+  const b = Buffer.from(ADMIN_TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// With SESSION_ADMIN_TOKEN set: every API call needs the token (x-admin-token header).
+// Without it: only requests from this machine (localhost) are accepted, so a public
+// deploy can never leak creds.json by accident.
+function requireAuth(req, res, next) {
+  if (ADMIN_TOKEN) {
+    if (tokenMatches(req.get('x-admin-token'))) return next();
+    return res.status(401).json({ ok: false, error: 'Missing or wrong access token.' });
+  }
+  if (isLoopback(req)) return next();
+  return res.status(403).json({
+    ok: false,
+    error: 'Session server is locked. Set SESSION_ADMIN_TOKEN on the server, or run it locally.'
+  });
+}
+
+function rateLimitPairing(req, res, next) {
+  const key = String(req.socket?.remoteAddress || 'unknown');
+  const now = Date.now();
+  const hits = (pairingHits.get(key) || []).filter((t) => now - t < 60 * 60 * 1000);
+  const last = hits[hits.length - 1];
+
+  if (last && now - last < PAIRING_COOLDOWN_MS) {
+    const wait = Math.ceil((PAIRING_COOLDOWN_MS - (now - last)) / 1000);
+    return res.status(429).json({ ok: false, error: `Slow down. Wait ${wait}s before requesting another code (repeated requests get your IP rate-limited by WhatsApp).` });
+  }
+  if (hits.length >= PAIRING_MAX_PER_HOUR) {
+    return res.status(429).json({ ok: false, error: 'Too many pairing attempts this hour. Wait and try again later.' });
+  }
+  hits.push(now);
+  pairingHits.set(key, hits);
+  next();
+}
+
+function normalizePhone(raw) {
+  // digits only, drop leading zeros (local format) - WhatsApp needs country code + number
+  return String(raw || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+}
+
 let pairingCode = null;
+let pairingCodeAt = 0;
 let socketReady = false;
 let activeSocket = null;
 let pairingLock = Promise.resolve();
@@ -145,37 +206,55 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
 
   closeActiveSocket();
   pairingCode = null;
+  pairingCodeAt = 0;
 
   return new Promise((resolve, reject) => {
     const globalTimeout = setTimeout(() => {
       closeActiveSocket();
-      reject(new Error('Pairing timed out. WhatsApp may have rate-limited your IP. Wait 30 mins and try again.'));
-    }, 45000);
+      reject(new Error('Pairing timed out. WhatsApp may have rate-limited this IP (common on cloud hosts like Render/Heroku/Railway). Run the session server on your own computer/home network, or wait ~30 minutes, then try again.'));
+    }, 70000);
 
-    // FIX: request the code directly after the socket is created instead of
-    // waiting for a 'connecting' event that may already have fired.
-    createSocket().then(async (sock) => {
-      activeSocket = sock;
-      try {
-        await delay(3000);
-        const code = await sock.requestPairingCode(phoneNumber);
-        if (!code) throw new Error('Empty pairing code returned.');
-
-        pairingCode = code;
-        clearTimeout(globalTimeout);
-
-        logger.session(`Pairing session ready for ${phoneNumber}`);
-        writeStatus({ generatedAt: new Date().toISOString(), lastPairingCode: pairingCode, lastError: null });
-        resolve(sock);
-      } catch (err) {
-        clearTimeout(globalTimeout);
-        closeActiveSocket();
-        reject(err);
-      }
-    }).catch((err) => {
-      clearTimeout(globalTimeout);
-      reject(err);
+    const waitUntilReady = (sock) => new Promise((ready) => {
+      // Request the code once the socket is actually connecting, not after a blind sleep.
+      const fallback = setTimeout(ready, 8000);
+      sock.ev.on('connection.update', (u) => {
+        if (u.connection === 'connecting' || u.qr) { clearTimeout(fallback); ready(); }
+      });
     });
+
+    const attempt = async (n) => {
+      closeActiveSocket();
+      const sock = await createSocket();
+      activeSocket = sock;
+      await waitUntilReady(sock);
+      await delay(1500);
+      const code = await sock.requestPairingCode(phoneNumber);
+      if (!code) throw new Error('Empty pairing code returned.');
+      return { sock, code };
+    };
+
+    (async () => {
+      let lastErr;
+      for (let n = 1; n <= 3; n++) {
+        try {
+          const { sock, code } = await attempt(n);
+          pairingCode = code;
+          pairingCodeAt = Date.now();
+          clearTimeout(globalTimeout);
+          logger.session(`Pairing session ready for ${phoneNumber} (attempt ${n})`);
+          writeStatus({ generatedAt: new Date().toISOString(), lastError: null, pairingAttempt: n });
+          return resolve(sock);
+        } catch (err) {
+          lastErr = err;
+          debugLog(`pairing attempt ${n} failed:`, err.message);
+          closeActiveSocket();
+          if (n < 3) await delay(3000 * n);
+        }
+      }
+      clearTimeout(globalTimeout);
+      writeStatus({ lastError: lastErr?.message || 'pairing failed' });
+      reject(new Error(`${lastErr?.message || 'Pairing failed'}. Check the number includes the country code and is registered on WhatsApp; if it keeps failing, your host IP is probably rate-limited - run this locally.`));
+    })();
   });
 }
 
@@ -202,12 +281,21 @@ async function exportSessionBase64() {
 
 app.get('/', (_, res) => { res.send(buildHtml()); });
 
-app.post('/generate', async (req, res) => {
-  const number = String(req.body.number || '').replace(/[^0-9]/g, '');
+function validateNumber(req, res, next) {
+  const number = normalizePhone(req.body.number);
+  if (!/^\d{10,15}$/.test(number)) {
+    return res.status(400).json({ ok: false, error: 'Use your full WhatsApp number with country code, no leading 0 or + (e.g. 2547XXXXXXXX), 10-15 digits.' });
+  }
+  req.phone = number;
+  next();
+}
+
+app.post('/generate', requireAuth, validateNumber, rateLimitPairing, async (req, res) => {
+  const number = req.phone;
   const forceReset = req.body.reset === '1' || req.body.reset === 'true' || req.query.reset === '1';
 
   if (!number || number.length < 10 || number.length > 15) {
-    res.status(400).json({ ok: false, error: 'Use a valid WhatsApp number with country code (10–15 digits).' });
+    res.status(400).json({ ok: false, error: 'Use your full WhatsApp number with country code, no leading 0 or + (e.g. 2547XXXXXXXX), 10-15 digits.' });
     return;
   }
 
@@ -229,17 +317,25 @@ app.post('/generate', async (req, res) => {
   await pairingLock;
 });
 
-app.get('/status', async (_, res) => {
+app.get('/status', requireAuth, async (_, res) => {
   const base64 = await exportSessionBase64();
-  res.json({ ok: true, linked: socketReady, pairingCode, hasSession: Boolean(base64) });
+  const age = pairingCodeAt ? Math.floor((Date.now() - pairingCodeAt) / 1000) : null;
+  res.json({
+    ok: true,
+    linked: socketReady,
+    pairingCode: age !== null && age < PAIRING_CODE_TTL_SEC ? pairingCode : null,
+    codeExpiresInSec: age !== null ? Math.max(0, PAIRING_CODE_TTL_SEC - age) : null,
+    hasSession: Boolean(base64)
+  });
 });
 
-app.get('/export', async (_, res) => {
+app.get('/export', requireAuth, async (_, res) => {
   const base64 = await exportSessionBase64();
   if (!base64) {
     res.status(404).json({ ok: false, error: 'No valid creds.json found. Complete pairing first.' });
     return;
   }
+  res.set('Cache-Control', 'no-store');
   res.json({ ok: true, session: base64 });
 });
 
@@ -525,6 +621,15 @@ function buildHtml() {
     document.body.removeChild(el);
   }
 
+  function getToken() {
+    let t = sessionStorage.getItem('adminToken');
+    if (t === null) {
+      t = prompt('Access token (leave empty if running locally):') || '';
+      sessionStorage.setItem('adminToken', t);
+    }
+    return t;
+  }
+
   async function generateCode() {
     $('errorBox').classList.add('hidden');
     const phone = $('phoneInput').value.replace(/[^0-9]/g, '');
@@ -541,10 +646,11 @@ function buildHtml() {
       // FIX: always send reset=1 so every attempt starts from clean auth state
       const res = await fetch('/generate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'x-admin-token': getToken() },
         body: 'number=' + encodeURIComponent(phone) + '&reset=1'
       });
       
+      if (res.status === 401) sessionStorage.removeItem('adminToken');
       const data = await res.json();
 
       if (data.ok && data.pairingCode) {
@@ -576,7 +682,7 @@ function buildHtml() {
 
   async function exportSession() {
     try {
-      const res = await fetch('/export');
+      const res = await fetch('/export', { headers: { 'x-admin-token': getToken() } });
       const data = await res.json();
       if (data.ok) {
         $('sessionValue').value = data.session;
@@ -605,7 +711,10 @@ function buildHtml() {
 </html>`;
 }
 
-const port = settings.PORT || settings.SESSION_SERVER_PORT || 3000;
+// Hosts like Render inject PORT for web services; locally use SESSION_SERVER_PORT so the
+// session server never collides with the bot's keep-alive port.
+const port = process.env.PORT ? settings.PORT : settings.SESSION_SERVER_PORT;
 app.listen(port, () => {
   logger.info(`Session server running at http://localhost:${port}`);
+  if (!ADMIN_TOKEN) logger.warn('SESSION_ADMIN_TOKEN not set: API only accepts requests from this machine.');
 });
