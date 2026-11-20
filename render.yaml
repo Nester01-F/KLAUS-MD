@@ -30,7 +30,7 @@ services:
       - key: DEVELOPER_NUMBER
         sync: false
 
-  # ─── Session Pairing Server (web — serves pairing page) ───
+  # ─── Session Pairing Server  (web — serves pairing page) ───
   - type: web
     name: klaus-md-session
     runtime: node
