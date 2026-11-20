@@ -33,6 +33,9 @@ function startApplication() {
   const sessionStatusPath = path.join(rootDir, 'session_status.json');
 
   let sock;
+  let retryCount = 0;
+  let ownerNotified = false;
+  let cachedVersion = null;
   const commandMap = new Map();
   const keepAliveApp = express();
   const metrics = { messages: 0, commands: 0, commandFailures: 0, statusReads: 0, autoReacts: 0, reconnects: 0, totalCommandMs: 0 };
@@ -146,7 +149,7 @@ function startApplication() {
       JSON.parse(decodedJson); 
 
       fs.mkdirSync(authDir, { recursive: true });
-      fs.writeFileSync(credsPath, decodedJson);
+      fs.writeFileSync(credsPath, decodedJson, { mode: 0o600 });
       logger.success('Session loaded from SESSION environment variable!');
     } catch (error) {
       logger.error(`Failed to load SESSION variable: ${error.message}`);
@@ -187,23 +190,43 @@ function startApplication() {
     keepAliveApp.listen(ENV.PORT, () => logger.step(2, 6, `Keep-alive server listening on ${ENV.PORT}`));
   }
 
+  // Serialise outgoing messages with a small randomised gap. Bursts of instant sends are a
+  // classic automation signal; tune with SEND_GAP_MS / SEND_JITTER_MS (0 disables).
+  function installSendThrottle(s) {
+    const gap = Number(process.env.SEND_GAP_MS ?? 1000);
+    const jitter = Number(process.env.SEND_JITTER_MS ?? 800);
+    if (!(gap > 0)) return;
+    const original = s.sendMessage.bind(s);
+    let chain = Promise.resolve();
+    s.sendMessage = (...args) => {
+      const result = chain.then(() => original(...args));
+      chain = result.catch(() => {}).then(() => delay(gap + Math.random() * jitter));
+      return result;
+    };
+  }
+
   async function startBot() {
     logger.step(3, 6, 'Preparing Baileys auth and socket');
     await ensureAuthFromSession();
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
-    const { version } = await fetchLatestWaWebVersion();
-    logger.step(4, 6, `Protocol version ${version.join('.')}`);
+    if (!cachedVersion) {
+      try { cachedVersion = (await fetchLatestWaWebVersion()).version; }
+      catch (e) { logger.warn(`Could not fetch latest WA Web version (${e.message}); using library default.`); }
+    }
+    const version = cachedVersion || undefined;
+    if (version) logger.step(4, 6, `Protocol version ${version.join('.')}`);
 
     sock = makeWASocket({
       version,
       auth: state,
       logger: pino({ level: 'silent' }),
       printQRInTerminal: false,
-      markOnlineOnConnect: true,
+      markOnlineOnConnect: false,
       syncFullHistory: false,
       browser: ['KLAUS MD', 'Desktop', '1.0.0']
     });
 
+    installSendThrottle(sock);
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
@@ -240,7 +263,8 @@ function startApplication() {
         writeSessionStatus({ connection: 'open', connectedNumber: sock.user?.id.split(':')[0], connectedAt: new Date().toISOString() });
         logger.step(5, 6, 'Connection established');
         logger.banner({ botName: ENV.BOT_NAME, prefix: getActivePrefix(), mode: ENV.MODE });
-        await notifyOwnerDeployment();
+        retryCount = 0;
+        if (!ownerNotified) { ownerNotified = true; await notifyOwnerDeployment(); }
         return;
       }
 
@@ -250,10 +274,19 @@ function startApplication() {
         return;
       }
 
+      // Do not hammer WhatsApp when it is telling us to stop:
+      // 440 = another device replaced this session, 403 = forbidden/banned.
+      if (statusCode === DisconnectReason.connectionReplaced || statusCode === 403) {
+        logger.error(`Stopped reconnecting (status ${statusCode}). Session replaced or number restricted.`);
+        return;
+      }
+
       if (connection === 'close') {
-        logger.warn('♻️ Reconnecting in 5 seconds...');
+        const wait = Math.min(5000 * 2 ** retryCount, 5 * 60 * 1000);
+        retryCount += 1;
         metrics.reconnects += 1;
-        setTimeout(() => startBot(), 5000);
+        logger.warn(`♻️ Reconnecting in ${Math.round(wait / 1000)}s (attempt ${retryCount})...`);
+        setTimeout(() => startBot().catch((e) => logger.errorTrace(e, 'reconnect')), wait);
       }
     });
 
