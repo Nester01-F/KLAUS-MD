@@ -15,6 +15,7 @@ session/auth_info_baileys/
 
 # ─── Runtime files ───
 session_status.json
+bot_settings.json
 pairing_debug.log
 *.log
 
