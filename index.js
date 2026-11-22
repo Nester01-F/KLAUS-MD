@@ -49,12 +49,19 @@ function startApplication() {
   }
   function getCommandNames() { return [...new Set([...commandMap.values()].map((c) => c.name))].sort((a, b) => a.localeCompare(b)); }
 
+  // Turns "2547...:12@s.whatsapp.net" into "2547..."; returns '' for @lid ids (not phone numbers).
+  function jidToNumber(jid) {
+    const s = String(jid || '');
+    if (s.endsWith('@lid')) return '';
+    return s.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+  }
+
   function loadCommands() {
     if (!fs.existsSync(commandsDir)) {
       logger.warn(`Commands directory not found: ${commandsDir}`);
       return;
     }
-    
+
     const files = fs.readdirSync(commandsDir).filter((file) => file.endsWith('.js') && file !== 'menuHandler.js');
     logger.info(`Discovering ${files.length} command module(s) in /commands`);
 
@@ -122,40 +129,52 @@ function startApplication() {
     }, 60 * 60 * 1000);
   }
 
-  
+  // FIX: a creds.json file exists as soon as pairing STARTS, so "file exists" is not
+  // proof of a working session. A linked session always has me.id.
+  function isLinkedCreds(file) {
+    try { return Boolean(JSON.parse(fs.readFileSync(file, 'utf-8'))?.me?.id); }
+    catch { return false; }
+  }
 
   async function ensureAuthFromSession() {
     const credsPath = path.join(authDir, 'creds.json');
-    
-    // 1. Check if we already have a local session
-    if (fs.existsSync(credsPath) && fs.statSync(credsPath).size > 0) {
-      logger.info('Existing local session found. Skipping decoding.');
+
+    // 1. Keep a local session only if it is actually linked
+    if (fs.existsSync(credsPath) && isLinkedCreds(credsPath)) {
+      logger.info('Existing linked session found. Skipping decoding.');
       return;
     }
 
-    // 2. Check if we have a Base64 SESSION env variable
+    // 2. Anything else in the auth folder is a leftover from a failed pairing: wipe it
+    if (fs.existsSync(authDir)) {
+      fs.rmSync(authDir, { recursive: true, force: true });
+      logger.warn('Removed incomplete local session.');
+    }
+
+    // 3. Load the Base64 SESSION env variable if present
     const sessionData = ENV.SESSION || process.env.SESSION;
     if (!sessionData) {
-      logger.warn('No local session or SESSION environment variable found. Bot will require pairing code.');
+      logger.warn('No SESSION variable found. Bot will show a QR code to pair.');
       return;
     }
 
     try {
       logger.info('Decoding SESSION variable...');
-      // Decode Base64 back to JSON
-      const decodedJson = Buffer.from(sessionData, 'base64').toString('utf-8');
-      
-      // Verify it's valid JSON before writing
-      JSON.parse(decodedJson); 
+      const decodedJson = Buffer.from(String(sessionData).trim(), 'base64').toString('utf-8');
+
+      // Must be valid JSON AND a fully linked session
+      const parsed = JSON.parse(decodedJson);
+      if (!parsed?.me?.id) throw new Error('session is not fully linked (me.id missing). Generate it again after the phone accepts the code.');
 
       fs.mkdirSync(authDir, { recursive: true });
-      fs.writeFileSync(credsPath, decodedJson, { mode: 0o600 });
+      fs.writeFileSync(path.join(authDir, 'creds.json'), decodedJson, { mode: 0o600 });
       logger.success('Session loaded from SESSION environment variable!');
     } catch (error) {
       logger.error(`Failed to load SESSION variable: ${error.message}`);
-      logger.warn('Make sure the SESSION variable is a valid Base64 string.');
+      logger.warn('Make sure the SESSION variable is a valid Base64 string from a completed pairing.');
     }
   }
+
   async function sendStatusLike(chatId, text, quoted, options = {}) {
     const settings = getBotSettings();
     const typingMs = options.typingMs ?? 900;
@@ -207,6 +226,15 @@ function startApplication() {
 
   async function startBot() {
     logger.step(3, 6, 'Preparing Baileys auth and socket');
+
+    // FIX: drop listeners of the previous socket so reconnects don't stack handlers
+    if (sock) {
+      try { sock.ev.removeAllListeners('connection.update'); } catch {}
+      try { sock.ev.removeAllListeners('messages.upsert'); } catch {}
+      try { sock.ev.removeAllListeners('creds.update'); } catch {}
+      try { sock.ws.close(); } catch {}
+    }
+
     await ensureAuthFromSession();
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
     if (!cachedVersion) {
@@ -270,7 +298,8 @@ function startApplication() {
 
       if (statusCode === DisconnectReason.loggedOut) {
         logger.error('🚪 Session logged out!');
-        logger.warn('Delete the session folder and re-pair the bot.');
+        logger.warn('Generate a NEW session string (and update SESSION) or delete session/auth_info_baileys and re-pair.');
+        writeSessionStatus({ connection: 'logged_out', loggedOutAt: new Date().toISOString() });
         return;
       }
 
@@ -278,6 +307,7 @@ function startApplication() {
       // 440 = another device replaced this session, 403 = forbidden/banned.
       if (statusCode === DisconnectReason.connectionReplaced || statusCode === 403) {
         logger.error(`Stopped reconnecting (status ${statusCode}). Session replaced or number restricted.`);
+        writeSessionStatus({ connection: 'stopped', stoppedStatus: statusCode });
         return;
       }
 
@@ -293,7 +323,15 @@ function startApplication() {
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
       const msg = messages[0];
-      if (!msg?.message || msg.key?.remoteJid === 'status@broadcast') return;
+      if (!msg?.message) return;
+
+      // FIX: status messages used to be dropped before the autostatus check could run
+      if (msg.key?.remoteJid === 'status@broadcast') {
+        if (getBotSettings().autostatus) {
+          try { await sock.readMessages([msg.key]); metrics.statusReads += 1; } catch {}
+        }
+        return;
+      }
 
       const chatId = msg.key.remoteJid;
       const sender = msg.key.participant || msg.key.remoteJid;
@@ -301,18 +339,22 @@ function startApplication() {
       const text = getMessageText(msg.message).trim();
       const settings = getBotSettings();
       const activePrefix = settings.prefix || ENV.PREFIX || '.';
-      const senderNumber = String(sender || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-      const isOwner = Boolean(ENV.OWNER_NUMBER) && senderNumber === ENV.OWNER_NUMBER;
-      const isSudoUser = Array.isArray(settings.sudo) && settings.sudo.includes(senderNumber);
+
+      // FIX: newer WhatsApp may send @lid ids. Collect every phone-number form we can find
+      // (participant, participantAlt, remoteJidAlt) and match against owner/sudo.
+      const senderNumbers = [
+        jidToNumber(sender),
+        jidToNumber(msg.key.participantAlt),
+        jidToNumber(msg.key.remoteJidAlt)
+      ].filter(Boolean);
+      const senderNumber = senderNumbers[0] || '';
+      const isOwner = Boolean(ENV.OWNER_NUMBER) && senderNumbers.includes(String(ENV.OWNER_NUMBER));
+      const isSudoUser = Array.isArray(settings.sudo) && senderNumbers.some((n) => settings.sudo.includes(n));
 
       metrics.messages += 1;
       logger.incoming(chatId, sender, isGroup, text.length);
 
-      if (settings.autostatus && chatId === 'status@broadcast') {
-        try { await sock.readMessages([msg.key]); metrics.statusReads += 1; } catch {}
-      }
-
-      if (settings.autoreact && chatId !== 'status@broadcast') {
+      if (settings.autoreact) {
         try { await sock.sendMessage(chatId, { react: { text: 'R', key: msg.key } }); metrics.autoReacts += 1; } catch {}
       }
 
@@ -338,7 +380,7 @@ function startApplication() {
 
       try {
         await command.execute({
-          sock, msg, chatId, sender, args, env: { ...ENV, PREFIX: activePrefix }, invokedAs, isOwner, isSudoUser, isGroup,
+          sock, msg, chatId, sender, senderNumber, args, env: { ...ENV, PREFIX: activePrefix }, invokedAs, isOwner, isSudoUser, isGroup,
           commandCount: getCommandNames().length, commandKeyCount: commandMap.size, commandNames: getCommandNames(), botSettings: settings, sendStatusLike, logger
         });
         const elapsed = Date.now() - startedAt;
