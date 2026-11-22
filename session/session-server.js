@@ -16,6 +16,11 @@ const settings = require('../setting');
 const logger = require('../utils/logger');
 
 const app = express();
+
+// Only enable when you are really behind a reverse proxy (Render, Railway, nginx...).
+// Then req.ip is the real visitor IP instead of the proxy's IP.
+if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
+
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use('/assets', express.static(path.join(__dirname, '..', 'lib')));
@@ -25,17 +30,23 @@ const credsPath = path.join(sessionRoot, 'creds.json');
 const statusPath = path.join(__dirname, '..', 'session_status.json');
 const debugLogPath = path.join(__dirname, '..', 'pairing_debug.log');
 
-
 /* ------------------------------------------------------------------ */
 /* Security: auth + rate limiting                                      */
 /* ------------------------------------------------------------------ */
 const ADMIN_TOKEN = String(process.env.SESSION_ADMIN_TOKEN || '');
+const DEFAULT_COUNTRY_CODE = String(process.env.DEFAULT_COUNTRY_CODE || '254'); // Kenya
 const PAIRING_COOLDOWN_MS = Number(process.env.PAIRING_COOLDOWN_MS || 30_000);
 const PAIRING_MAX_PER_HOUR = Number(process.env.PAIRING_MAX_PER_HOUR || 6);
-const PAIRING_CODE_TTL_SEC = 120; // WhatsApp codes are short-lived; shown to the user as a hint
+const PAIRING_CODE_TTL_SEC = 120; // WhatsApp codes are short-lived
 const pairingHits = new Map(); // ip -> [timestamps]
 
+function clientIp(req) {
+  return String(req.ip || req.socket?.remoteAddress || 'unknown');
+}
+
 function isLoopback(req) {
+  // If a proxy forwarded this request, it is NOT a genuine local request.
+  if (req.get('x-forwarded-for') || req.get('forwarded')) return false;
   const ip = String(req.socket?.remoteAddress || '');
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
 }
@@ -62,7 +73,7 @@ function requireAuth(req, res, next) {
 }
 
 function rateLimitPairing(req, res, next) {
-  const key = String(req.socket?.remoteAddress || 'unknown');
+  const key = clientIp(req);
   const now = Date.now();
   const hits = (pairingHits.get(key) || []).filter((t) => now - t < 60 * 60 * 1000);
   const last = hits[hits.length - 1];
@@ -79,13 +90,18 @@ function rateLimitPairing(req, res, next) {
   next();
 }
 
+// FIX: local format (0712345678) is converted to international (254712345678)
+// instead of just stripping the zero, which produced a 9-digit invalid number.
 function normalizePhone(raw) {
-  // digits only, drop leading zeros (local format) - WhatsApp needs country code + number
-  return String(raw || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+  let n = String(raw || '').replace(/[^0-9]/g, '');
+  if (n.startsWith('00')) n = n.slice(2);                          // 00254... -> 254...
+  else if (n.startsWith('0')) n = DEFAULT_COUNTRY_CODE + n.replace(/^0+/, ''); // 07... -> 2547...
+  return n;
 }
 
 let pairingCode = null;
 let pairingCodeAt = 0;
+let lastPairError = null;
 let socketReady = false;
 let activeSocket = null;
 let pairingLock = Promise.resolve();
@@ -105,6 +121,19 @@ function writeStatus(update) {
   debugLog('status.json →', JSON.stringify(update));
 }
 
+// True only when creds.json exists AND the device finished linking (me.id is set).
+function readLinkedCreds() {
+  try {
+    if (!fs.existsSync(credsPath)) return null;
+    const raw = fs.readFileSync(credsPath, 'utf-8').trim();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.me?.id ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
 function ensureFreshAuthState(forceReset = false) {
   if (forceReset && fs.existsSync(sessionRoot)) {
     fs.rmSync(sessionRoot, { recursive: true, force: true });
@@ -115,10 +144,11 @@ function ensureFreshAuthState(forceReset = false) {
   }
 }
 
-// FIX: mark the socket as intentionally closed so the auto-reconnect logic ignores it
+// Mark the socket as intentionally closed so the auto-reconnect logic ignores it
 function closeActiveSocket() {
   if (activeSocket) {
     activeSocket.intentionalClose = true;
+    try { activeSocket.ev.removeAllListeners('connection.update'); } catch {}
     try { activeSocket.ws.close(); } catch {}
   }
   activeSocket = null;
@@ -140,6 +170,18 @@ async function createSocket() {
     syncFullHistory: false
   });
 
+  // FIX: the "ready" listener is attached right here, synchronously after the socket
+  // is created, so the 'connecting' event can no longer be missed.
+  sock.readyPromise = new Promise((resolve) => {
+    const fallback = setTimeout(resolve, 6000);
+    sock.ev.on('connection.update', (u) => {
+      if (u.connection === 'connecting' || u.qr) {
+        clearTimeout(fallback);
+        resolve();
+      }
+    });
+  });
+
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
@@ -147,6 +189,8 @@ async function createSocket() {
 
     if (connection === 'open') {
       socketReady = true;
+      pairingCode = null;
+      lastPairError = null;
       logger.session('Session linked successfully.');
       writeStatus({ linkedAt: new Date().toISOString(), lastError: null, loggedOut: false });
     }
@@ -154,25 +198,42 @@ async function createSocket() {
     if (connection === 'close') {
       socketReady = false;
 
-      // We closed it ourselves (reset / timeout / replaced) - do not reconnect
+      // We closed it ourselves (reset / timeout / replaced / export) - do not reconnect
       if (sock.intentionalClose) return;
 
       const code = lastDisconnect?.error?.output?.statusCode;
-      debugLog('closed with status', String(code),'|', lastDisconnect?.error?.message);
+      debugLog('closed with status', String(code), '|', lastDisconnect?.error?.message);
 
       if (code === DisconnectReason.loggedOut) {
         logger.warn('Session logged out — creds are no longer valid.');
+        pairingCode = null;
+        lastPairError = 'Logged out from WhatsApp. Generate a new code.';
         writeStatus({ loggedOut: true });
         return;
       }
 
-      // FIX: after the phone accepts the pairing code, WhatsApp closes the socket
-      // with 515 (restartRequired). We must open a NEW socket with the saved creds
-      // to finish linking. Also reconnect on other drops once the device is registered.
+      // FIX: another instance (e.g. your bot) connected with the same creds.
+      // Reconnecting here would start a tug-of-war, so stand down.
+      if (code === DisconnectReason.connectionReplaced) {
+        logger.warn('Connection replaced by another instance — not reconnecting.');
+        writeStatus({ lastError: 'connection replaced by another instance' });
+        return;
+      }
+
+      // After the phone accepts the pairing code, WhatsApp closes the socket with 515
+      // (restartRequired). We must open a NEW socket with the saved creds to finish
+      // linking. Also reconnect on other drops once the device is registered.
       const shouldReconnect =
         code === DisconnectReason.restartRequired || state.creds.registered;
 
-      if (!shouldReconnect) return;
+      // FIX: socket died before the phone entered the code -> the code is dead,
+      // so tell the UI instead of leaving a useless code on screen.
+      if (!shouldReconnect) {
+        pairingCode = null;
+        lastPairError = `Connection closed before pairing finished (status ${code}). Generate a new code.`;
+        writeStatus({ lastError: lastPairError });
+        return;
+      }
 
       await delay(1500);
       if (sock.intentionalClose) return;
@@ -191,22 +252,21 @@ async function createSocket() {
 }
 
 async function buildSocket(phoneNumber, { forceReset = false } = {}) {
+  // FIX: close the old socket BEFORE wiping the auth folder, so it cannot
+  // write stale creds into the fresh folder.
+  if (forceReset) closeActiveSocket();
   ensureFreshAuthState(forceReset);
 
-  if (!forceReset && fs.existsSync(credsPath)) {
-    try {
-      const existing = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
-      if (existing?.me?.id) {
-        socketReady = true;
-        logger.session('Existing session found — no pairing needed.');
-        return activeSocket;
-      }
-    } catch {}
+  if (!forceReset && readLinkedCreds()) {
+    socketReady = true;
+    logger.session('Existing session found — no pairing needed.');
+    return activeSocket;
   }
 
   closeActiveSocket();
   pairingCode = null;
   pairingCodeAt = 0;
+  lastPairError = null;
 
   return new Promise((resolve, reject) => {
     const globalTimeout = setTimeout(() => {
@@ -214,19 +274,11 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
       reject(new Error('Pairing timed out. WhatsApp may have rate-limited this IP (common on cloud hosts like Render/Heroku/Railway). Run the session server on your own computer/home network, or wait ~30 minutes, then try again.'));
     }, 70000);
 
-    const waitUntilReady = (sock) => new Promise((ready) => {
-      // Request the code once the socket is actually connecting, not after a blind sleep.
-      const fallback = setTimeout(ready, 8000);
-      sock.ev.on('connection.update', (u) => {
-        if (u.connection === 'connecting' || u.qr) { clearTimeout(fallback); ready(); }
-      });
-    });
-
-    const attempt = async (n) => {
+    const attempt = async () => {
       closeActiveSocket();
       const sock = await createSocket();
       activeSocket = sock;
-      await waitUntilReady(sock);
+      await sock.readyPromise;
       await delay(1500);
       const code = await sock.requestPairingCode(phoneNumber);
       if (!code) throw new Error('Empty pairing code returned.');
@@ -237,7 +289,7 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
       let lastErr;
       for (let n = 1; n <= 3; n++) {
         try {
-          const { sock, code } = await attempt(n);
+          const { sock, code } = await attempt();
           pairingCode = code;
           pairingCodeAt = Date.now();
           clearTimeout(globalTimeout);
@@ -258,18 +310,14 @@ async function buildSocket(phoneNumber, { forceReset = false } = {}) {
   });
 }
 
+// FIX: only exports when linking is complete (me.id present), never a half-finished creds.json.
 async function exportSessionBase64() {
-  if (!fs.existsSync(credsPath)) {
-    writeStatus({ lastSessionLength: null, lastExportError: 'creds.json missing' });
+  const raw = readLinkedCreds();
+  if (!raw) {
+    writeStatus({ lastSessionLength: null, lastExportError: 'no completed session (creds.json missing or not linked yet)' });
     return null;
   }
-
   try {
-    const raw = fs.readFileSync(credsPath, 'utf-8').trim();
-    if (!raw) {
-      writeStatus({ lastSessionLength: 0, lastExportError: 'creds.json is empty' });
-      return null;
-    }
     const base64 = Buffer.from(raw, 'utf-8').toString('base64');
     writeStatus({ lastSessionLength: base64.length, lastExportError: null });
     return base64;
@@ -284,7 +332,7 @@ app.get('/', (_, res) => { res.send(buildHtml()); });
 function validateNumber(req, res, next) {
   const number = normalizePhone(req.body.number);
   if (!/^\d{10,15}$/.test(number)) {
-    return res.status(400).json({ ok: false, error: 'Use your full WhatsApp number with country code, no leading 0 or + (e.g. 2547XXXXXXXX), 10-15 digits.' });
+    return res.status(400).json({ ok: false, error: 'Use your full WhatsApp number, e.g. 2547XXXXXXXX or 07XXXXXXXX (10-15 digits).' });
   }
   req.phone = number;
   next();
@@ -294,11 +342,6 @@ app.post('/generate', requireAuth, validateNumber, rateLimitPairing, async (req,
   const number = req.phone;
   const forceReset = req.body.reset === '1' || req.body.reset === 'true' || req.query.reset === '1';
 
-  if (!number || number.length < 10 || number.length > 15) {
-    res.status(400).json({ ok: false, error: 'Use your full WhatsApp number with country code, no leading 0 or + (e.g. 2547XXXXXXXX), 10-15 digits.' });
-    return;
-  }
-
   const run = async () => {
     try {
       await buildSocket(number, { forceReset });
@@ -306,7 +349,12 @@ app.post('/generate', requireAuth, validateNumber, rateLimitPairing, async (req,
         res.json({ ok: true, pairingCode: null, info: 'Existing session found — already linked.' });
         return;
       }
-      res.json({ ok: true, pairingCode, info: 'Open WhatsApp → Linked devices → Link with phone number.' });
+      res.json({
+        ok: true,
+        pairingCode,
+        expiresInSec: PAIRING_CODE_TTL_SEC,
+        info: 'Open WhatsApp → Linked devices → Link with phone number.'
+      });
     } catch (err) {
       logger.error(`Session generation failed: ${err.message}`);
       res.status(500).json({ ok: false, error: err.message });
@@ -317,26 +365,34 @@ app.post('/generate', requireAuth, validateNumber, rateLimitPairing, async (req,
   await pairingLock;
 });
 
-app.get('/status', requireAuth, async (_, res) => {
-  const base64 = await exportSessionBase64();
+app.get('/status', requireAuth, (_, res) => {
   const age = pairingCodeAt ? Math.floor((Date.now() - pairingCodeAt) / 1000) : null;
+  const codeAlive = age !== null && age < PAIRING_CODE_TTL_SEC && pairingCode;
   res.json({
     ok: true,
     linked: socketReady,
-    pairingCode: age !== null && age < PAIRING_CODE_TTL_SEC ? pairingCode : null,
+    pairingCode: codeAlive ? pairingCode : null,
     codeExpiresInSec: age !== null ? Math.max(0, PAIRING_CODE_TTL_SEC - age) : null,
-    hasSession: Boolean(base64)
+    hasSession: Boolean(readLinkedCreds()),
+    error: lastPairError
   });
 });
 
 app.get('/export', requireAuth, async (_, res) => {
   const base64 = await exportSessionBase64();
   if (!base64) {
-    res.status(404).json({ ok: false, error: 'No valid creds.json found. Complete pairing first.' });
+    res.status(404).json({ ok: false, error: 'No completed session found. Finish pairing first (the phone must accept the code).' });
     return;
   }
   res.set('Cache-Control', 'no-store');
   res.json({ ok: true, session: base64 });
+
+  // FIX: release the session so your bot can use the same creds without a
+  // "connection replaced" (440) fight. Safe: this does not log the device out.
+  setTimeout(() => {
+    debugLog('closing pairing socket after export');
+    closeActiveSocket();
+  }, 1000);
 });
 
 /* ------------------------------------------------------------------ */
@@ -505,6 +561,8 @@ function buildHtml() {
     letter-spacing: 8px; color: #fff; text-shadow: 0 0 20px rgba(16, 185, 129, 0.8); user-select: all; cursor: pointer;
   }
 
+  .code-timer { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 12px; }
+
   .instructions {
     font-size: 12px; color: var(--text-muted); line-height: 1.8;
     margin-bottom: 24px; padding-left: 15px; border-left: 2px solid rgba(16, 185, 129, 0.3);
@@ -517,6 +575,7 @@ function buildHtml() {
     display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); animation: slideIn 0.3s ease;
   }
   .alert.error { background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; box-shadow: 0 0 15px rgba(239, 68, 68, 0.1); }
+  .alert.success { background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.4); color: #6ee7b7; margin-top: 0; margin-bottom: 15px; }
   
   @keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -554,9 +613,14 @@ function buildHtml() {
   </div>
 
   <div id="step2" class="glass-panel hidden">
-    <div class="code-display">
+    <div id="linkedBox" class="alert success hidden">
+      <span>Device linked successfully. You can export the session string now.</span>
+    </div>
+
+    <div class="code-display" id="codeBox">
       <div class="code-label">Pairing Code Generated</div>
       <div class="code-value" id="codeDisplay" onclick="copyCode()" title="Click to copy"></div>
+      <div class="code-timer" id="codeTimer"></div>
     </div>
 
     <div class="instructions">
@@ -574,6 +638,14 @@ function buildHtml() {
       <span>Export Session String</span>
     </button>
 
+    <button class="cyber-btn" onclick="resetUi()" style="border-color: var(--text-muted); color: var(--text-muted); box-shadow: none; margin-bottom: 15px;">
+      <span>Start Over</span>
+    </button>
+
+    <div id="errorBox2" class="alert error hidden">
+      <span id="errorText2"></span>
+    </div>
+
     <div id="sessionResult" class="hidden" style="margin-top: 15px;">
       <label class="input-label">Session String</label>
       <textarea id="sessionValue" readonly style="width: 100%; min-height: 80px; background: rgba(0,0,0,0.6); border: 1px solid rgba(249, 115, 22, 0.3); border-radius: 10px; padding: 10px; color: #fff; font-family: var(--font-mono); font-size: 11px; margin-bottom: 10px; resize: vertical;"></textarea>
@@ -587,11 +659,16 @@ function buildHtml() {
 
 <script>
   const $ = (id) => document.getElementById(id);
+  let pollTimer = null;
 
   function showError(msg) {
-    $('errorText').textContent = msg;
-    $('errorBox').classList.remove('hidden');
-    setTimeout(() => $('errorBox').classList.add('hidden'), 6000);
+    // show in whichever panel is currently visible
+    const onStep2 = !$('step2').classList.contains('hidden');
+    const box = onStep2 ? $('errorBox2') : $('errorBox');
+    const txt = onStep2 ? $('errorText2') : $('errorText');
+    txt.textContent = msg;
+    box.classList.remove('hidden');
+    setTimeout(() => box.classList.add('hidden'), 8000);
   }
 
   function setLoading(btn, on, label) {
@@ -622,12 +699,57 @@ function buildHtml() {
   }
 
   function getToken() {
-    let t = sessionStorage.getItem('adminToken');
+    let t = null;
+    try { t = sessionStorage.getItem('adminToken'); } catch (e) {}
     if (t === null) {
       t = prompt('Access token (leave empty if running locally):') || '';
-      sessionStorage.setItem('adminToken', t);
+      try { sessionStorage.setItem('adminToken', t); } catch (e) {}
     }
     return t;
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function resetUi() {
+    stopPolling();
+    $('step2').classList.add('hidden');
+    $('step1').classList.remove('hidden');
+    $('sessionResult').classList.add('hidden');
+    $('linkedBox').classList.add('hidden');
+    $('codeBox').classList.remove('hidden');
+  }
+
+  // Watch the server so the page knows when the code expired, died, or got linked.
+  function startPolling() {
+    stopPolling();
+    pollTimer = setInterval(async () => {
+      try {
+        const res = await fetch('/status', { headers: { 'x-admin-token': getToken() } });
+        const s = await res.json();
+        if (!s.ok) return;
+
+        if (s.linked || s.hasSession) {
+          $('linkedBox').classList.remove('hidden');
+          $('codeBox').classList.add('hidden');
+          stopPolling();
+          return;
+        }
+        if (s.error) {
+          showError(s.error);
+          $('codeTimer').textContent = 'Code is no longer valid. Press Start Over.';
+          stopPolling();
+          return;
+        }
+        if (s.pairingCode) {
+          $('codeTimer').textContent = 'Expires in ' + s.codeExpiresInSec + 's';
+        } else {
+          $('codeTimer').textContent = 'Code expired. Press Start Over and generate a new one.';
+          stopPolling();
+        }
+      } catch (e) { /* ignore transient network errors */ }
+    }, 3000);
   }
 
   async function generateCode() {
@@ -643,20 +765,24 @@ function buildHtml() {
     setLoading(btn, true, 'Connecting...');
 
     try {
-      // FIX: always send reset=1 so every attempt starts from clean auth state
+      // always send reset=1 so every attempt starts from clean auth state
       const res = await fetch('/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'x-admin-token': getToken() },
         body: 'number=' + encodeURIComponent(phone) + '&reset=1'
       });
       
-      if (res.status === 401) sessionStorage.removeItem('adminToken');
+      if (res.status === 401) { try { sessionStorage.removeItem('adminToken'); } catch (e) {} }
       const data = await res.json();
 
       if (data.ok && data.pairingCode) {
         $('codeDisplay').textContent = data.pairingCode;
+        $('codeTimer').textContent = 'Expires in ' + (data.expiresInSec || 120) + 's';
+        $('linkedBox').classList.add('hidden');
+        $('codeBox').classList.remove('hidden');
         $('step1').classList.add('hidden');
         $('step2').classList.remove('hidden');
+        startPolling();
       } else if (data.ok) {
         showError(data.info || 'Already linked.');
       } else {
@@ -687,6 +813,7 @@ function buildHtml() {
       if (data.ok) {
         $('sessionValue').value = data.session;
         $('sessionResult').classList.remove('hidden');
+        stopPolling();
       } else {
         showError(data.error || 'No session available yet. Link first.');
       }
@@ -711,9 +838,9 @@ function buildHtml() {
 </html>`;
 }
 
-// Hosts like Render inject PORT for web services; locally use SESSION_SERVER_PORT so the
-// session server never collides with the bot's keep-alive port.
-const port = process.env.PORT ? settings.PORT : settings.SESSION_SERVER_PORT;
+// FIX: use the port the host injects (Render/Railway/Heroku set PORT).
+// Locally use SESSION_SERVER_PORT so it never collides with the bot's keep-alive port.
+const port = process.env.PORT || settings.SESSION_SERVER_PORT;
 app.listen(port, () => {
   logger.info(`Session server running at http://localhost:${port}`);
   if (!ADMIN_TOKEN) logger.warn('SESSION_ADMIN_TOKEN not set: API only accepts requests from this machine.');
