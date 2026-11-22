@@ -33,7 +33,14 @@ const debugLogPath = path.join(__dirname, '..', 'pairing_debug.log');
 /* ------------------------------------------------------------------ */
 /* Security: auth + rate limiting                                      */
 /* ------------------------------------------------------------------ */
-const ADMIN_TOKEN = String(process.env.SESSION_ADMIN_TOKEN || '');
+// If no token is configured and we are on a host (PORT is injected), generate a random
+// one at startup and print it in the logs, so the page works without manual setup.
+let ADMIN_TOKEN = String(process.env.SESSION_ADMIN_TOKEN || '');
+let TOKEN_AUTO_GENERATED = false;
+if (!ADMIN_TOKEN && process.env.PORT) {
+  ADMIN_TOKEN = crypto.randomBytes(16).toString('hex');
+  TOKEN_AUTO_GENERATED = true;
+}
 const DEFAULT_COUNTRY_CODE = String(process.env.DEFAULT_COUNTRY_CODE || '254'); // Kenya
 const PAIRING_COOLDOWN_MS = Number(process.env.PAIRING_COOLDOWN_MS || 30_000);
 const PAIRING_MAX_PER_HOUR = Number(process.env.PAIRING_MAX_PER_HOUR || 6);
@@ -702,7 +709,7 @@ function buildHtml() {
     let t = null;
     try { t = sessionStorage.getItem('adminToken'); } catch (e) {}
     if (t === null) {
-      t = prompt('Access token (leave empty if running locally):') || '';
+      t = prompt('Access token (find it in the server logs, or SESSION_ADMIN_TOKEN; leave empty if running locally):') || '';
       try { sessionStorage.setItem('adminToken', t); } catch (e) {}
     }
     return t;
@@ -772,7 +779,7 @@ function buildHtml() {
         body: 'number=' + encodeURIComponent(phone) + '&reset=1'
       });
       
-      if (res.status === 401) { try { sessionStorage.removeItem('adminToken'); } catch (e) {} }
+      if (res.status === 401 || res.status === 403) { try { sessionStorage.removeItem('adminToken'); } catch (e) {} }
       const data = await res.json();
 
       if (data.ok && data.pairingCode) {
@@ -843,5 +850,10 @@ function buildHtml() {
 const port = process.env.PORT || settings.SESSION_SERVER_PORT;
 app.listen(port, () => {
   logger.info(`Session server running at http://localhost:${port}`);
-  if (!ADMIN_TOKEN) logger.warn('SESSION_ADMIN_TOKEN not set: API only accepts requests from this machine.');
+  if (TOKEN_AUTO_GENERATED) {
+    logger.warn(`SESSION_ADMIN_TOKEN was not set, so a temporary one was generated: ${ADMIN_TOKEN}`);
+    logger.warn('Enter it when the page asks for the access token. It changes on every restart; set SESSION_ADMIN_TOKEN to keep one.');
+  } else if (!ADMIN_TOKEN) {
+    logger.warn('SESSION_ADMIN_TOKEN not set: API only accepts requests from this machine.');
+  }
 });
